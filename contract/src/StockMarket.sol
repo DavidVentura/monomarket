@@ -9,14 +9,18 @@ contract StockMarket {
     uint256 public constant MIN_PRICE = 0;
     uint256 public constant MAX_PRICE = 100;
 
-    mapping(address => uint256) public balances;
-    mapping(address => uint256) public holdings;
-    mapping(address => bool) public isActive;
+    struct UserData {
+        uint128 balance;
+        uint128 holdings;
+        bool isActive;
+    }
+
+    mapping(address => UserData) public userData;
     address[] public activeAddresses;
 
     event PriceUpdate(uint256 oldPrice, uint256 newPrice, uint256 blockNumber);
-    event Bought(address indexed user, uint256 amount, uint256 price, uint256 timestamp, uint256 blockNumber, uint256 newBalance, uint256 newHoldings);
-    event Sold(address indexed user, uint256 amount, uint256 price, uint256 timestamp, uint256 blockNumber, uint256 newBalance, uint256 newHoldings);
+    event Bought(address indexed user, uint256 amount, uint256 newBalance, uint256 newHoldings);
+    event Sold(address indexed user, uint256 amount, uint256 newBalance, uint256 newHoldings);
     event NewUser(address indexed user);
 
     modifier initializeUser() {
@@ -25,18 +29,22 @@ contract StockMarket {
     }
 
     function _initializeUser() internal {
-        if (!isActive[msg.sender]) {
-            balances[msg.sender] = INITIAL_CREDITS;
-            isActive[msg.sender] = true;
+        UserData storage user = userData[msg.sender];
+        if (!user.isActive) {
+            // forge-lint: disable-next-line(unsafe-typecast)
+            user.balance = uint128(INITIAL_CREDITS);
+            user.isActive = true;
             activeAddresses.push(msg.sender);
             emit NewUser(msg.sender);
         }
     }
 
     function register() external {
-        require(!isActive[msg.sender], "Already registered");
-        balances[msg.sender] = INITIAL_CREDITS;
-        isActive[msg.sender] = true;
+        UserData storage user = userData[msg.sender];
+        require(!user.isActive, "Already registered");
+        // forge-lint: disable-next-line(unsafe-typecast)
+        user.balance = uint128(INITIAL_CREDITS);
+        user.isActive = true;
         activeAddresses.push(msg.sender);
         emit NewUser(msg.sender);
     }
@@ -78,41 +86,54 @@ contract StockMarket {
     }
 
     function buy(uint256 amount) external {
-        require(isActive[msg.sender], "Not registered");
+        UserData storage user = userData[msg.sender];
+        require(user.isActive, "Not registered");
         require(amount > 0, "Amount must be greater than 0");
 
-        uint256 cost = amount * price;
-        require(balances[msg.sender] >= cost, "Insufficient credits");
+        uint256 currentPrice = price;
+        uint256 cost = amount * currentPrice;
+        require(user.balance >= cost, "Insufficient credits");
 
-        balances[msg.sender] -= cost;
-        holdings[msg.sender] += amount;
+        unchecked {
+            // forge-lint: disable-next-line(unsafe-typecast)
+            user.balance -= uint128(cost);
+            // forge-lint: disable-next-line(unsafe-typecast)
+            user.holdings += uint128(amount);
+        }
 
-        emit Bought(msg.sender, amount, price, block.timestamp, block.number, balances[msg.sender], holdings[msg.sender]);
+        emit Bought(msg.sender, amount, user.balance, user.holdings);
     }
 
     function sell(uint256 amount) external {
-        require(isActive[msg.sender], "Not registered");
+        UserData storage user = userData[msg.sender];
+        require(user.isActive, "Not registered");
         require(amount > 0, "Amount must be greater than 0");
-        require(holdings[msg.sender] >= amount, "Insufficient holdings");
+        require(user.holdings >= amount, "Insufficient holdings");
 
-        uint256 revenue = amount * price;
+        uint256 currentPrice = price;
+        uint256 revenue = amount * currentPrice;
 
-        holdings[msg.sender] -= amount;
-        balances[msg.sender] += revenue;
+        unchecked {
+            // forge-lint: disable-next-line(unsafe-typecast)
+            user.holdings -= uint128(amount);
+            // forge-lint: disable-next-line(unsafe-typecast)
+            user.balance += uint128(revenue);
+        }
 
-        emit Sold(msg.sender, amount, price, block.timestamp, block.number, balances[msg.sender], holdings[msg.sender]);
+        emit Sold(msg.sender, amount, user.balance, user.holdings);
     }
 
     function getBalance(address user) external view returns (uint256) {
-        return balances[user];
+        return userData[user].balance;
     }
 
     function getHoldings(address user) external view returns (uint256) {
-        return holdings[user];
+        return userData[user].holdings;
     }
 
     function getNetWorth(address user) external view returns (uint256) {
-        return holdings[user] * price + balances[user];
+        UserData storage data = userData[user];
+        return uint256(data.holdings) * price + uint256(data.balance);
     }
 
     function getAllActiveAddresses() external view returns (address[] memory) {
