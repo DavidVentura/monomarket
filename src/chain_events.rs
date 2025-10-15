@@ -29,6 +29,14 @@ where
         let inner_log = log.inner;
 
         if let Some(topic0) = topic0_opt {
+            tracing::debug!(
+                "Received event with topic0: {:?}, PriceUpdate: {:?}, Bought: {:?}, Sold: {:?}, NewUser: {:?}",
+                topic0,
+                StockMarket::PriceUpdate::SIGNATURE_HASH,
+                StockMarket::Bought::SIGNATURE_HASH,
+                StockMarket::Sold::SIGNATURE_HASH,
+                StockMarket::NewUser::SIGNATURE_HASH
+            );
             if topic0 == StockMarket::PriceUpdate::SIGNATURE_HASH {
                 if let Ok(decoded) = StockMarket::PriceUpdate::decode_log(&inner_log, true) {
                     let new_price = decoded.newPrice.to::<u64>();
@@ -53,10 +61,11 @@ where
                     let _ = broadcast_tx.send(msg);
                 }
             } else if topic0 == StockMarket::Bought::SIGNATURE_HASH {
-                if let Ok(decoded) = StockMarket::Bought::decode_log(&inner_log, true) {
-                    let user_addr = decoded.user;
-                    let balance = decoded.newBalance.to::<u64>();
-                    let holdings = decoded.newHoldings.to::<u64>();
+                match StockMarket::Bought::decode_log(&inner_log, true) {
+                    Ok(decoded) => {
+                        let user_addr = decoded.user;
+                        let balance = decoded.newBalance.to::<u64>();
+                        let holdings = decoded.newHoldings.to::<u64>();
 
                     let (name, current_price) = {
                         let mut state_guard = state.write().await;
@@ -69,11 +78,9 @@ where
                     };
 
                     tracing::info!(
-                        "💰 Bought: user={:?}, amount={}, price={}, block={}, balance={}, holdings={}",
+                        "💰 Bought: user={:?}, amount={}, balance={}, holdings={}",
                         user_addr,
                         decoded.amount,
-                        decoded.price,
-                        decoded.blockNumber,
                         balance,
                         holdings,
                     );
@@ -82,72 +89,84 @@ where
                         user: format!("{:?}", user_addr),
                         name: name.clone(),
                         amount: decoded.amount.to::<u64>(),
-                        price: decoded.price.to::<u64>(),
-                        block_number: decoded.blockNumber.to::<u64>(),
                         balance,
                         holdings,
                     };
-                    let _ = broadcast_tx.send(msg);
+                        let _ = broadcast_tx.send(msg);
 
-                    let position_msg = ServerMessage::Position {
-                        address: format!("{:?}", user_addr),
-                        name,
-                        balance,
-                        holdings,
-                        current_price,
-                    };
-                    let _ = broadcast_tx.send(position_msg);
+                        let position_msg = ServerMessage::Position {
+                            address: format!("{:?}", user_addr),
+                            name,
+                            balance,
+                            holdings,
+                            current_price,
+                        };
+                        let _ = broadcast_tx.send(position_msg);
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to decode Bought event: {}", e);
+                    }
                 }
             } else if topic0 == StockMarket::Sold::SIGNATURE_HASH {
-                if let Ok(decoded) = StockMarket::Sold::decode_log(&inner_log, true) {
-                    let user_addr = decoded.user;
-                    let balance = decoded.newBalance.to::<u64>();
-                    let holdings = decoded.newHoldings.to::<u64>();
+                match StockMarket::Sold::decode_log(&inner_log, true) {
+                    Ok(decoded) => {
+                        let user_addr = decoded.user;
+                        let balance = decoded.newBalance.to::<u64>();
+                        let holdings = decoded.newHoldings.to::<u64>();
 
-                    let (name, current_price) = {
-                        let mut state_guard = state.write().await;
-                        state_guard.balances.insert(user_addr, balance);
-                        state_guard.holdings.insert(user_addr, holdings);
-                        (
-                            state_guard.names.get(&user_addr).cloned(),
-                            state_guard.current_price,
-                        )
-                    };
+                        let (name, current_price) = {
+                            let mut state_guard = state.write().await;
+                            state_guard.balances.insert(user_addr, balance);
+                            state_guard.holdings.insert(user_addr, holdings);
+                            (
+                                state_guard.names.get(&user_addr).cloned(),
+                                state_guard.current_price,
+                            )
+                        };
 
-                    tracing::info!(
-                        "💸 Sold: user={:?}, amount={}, price={}, block={}, balance={}, holdings={}",
-                        user_addr,
-                        decoded.amount,
-                        decoded.price,
-                        decoded.blockNumber,
-                        balance,
-                        holdings
-                    );
+                        tracing::info!(
+                            "💸 Sold: user={:?}, amount={}, balance={}, holdings={}",
+                            user_addr,
+                            decoded.amount,
+                            balance,
+                            holdings
+                        );
 
-                    let msg = ServerMessage::Sold {
-                        user: format!("{:?}", user_addr),
-                        name: name.clone(),
-                        amount: decoded.amount.to::<u64>(),
-                        price: decoded.price.to::<u64>(),
-                        block_number: decoded.blockNumber.to::<u64>(),
-                        balance,
-                        holdings,
-                    };
-                    let _ = broadcast_tx.send(msg);
+                        let msg = ServerMessage::Sold {
+                            user: format!("{:?}", user_addr),
+                            name: name.clone(),
+                            amount: decoded.amount.to::<u64>(),
+                            balance,
+                            holdings,
+                        };
+                        let _ = broadcast_tx.send(msg);
 
-                    let position_msg = ServerMessage::Position {
-                        address: format!("{:?}", user_addr),
-                        name,
-                        balance,
-                        holdings,
-                        current_price,
-                    };
-                    let _ = broadcast_tx.send(position_msg);
+                        let position_msg = ServerMessage::Position {
+                            address: format!("{:?}", user_addr),
+                            name,
+                            balance,
+                            holdings,
+                            current_price,
+                        };
+                        let _ = broadcast_tx.send(position_msg);
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to decode Sold event: {}", e);
+                    }
                 }
             } else if topic0 == StockMarket::NewUser::SIGNATURE_HASH {
                 if let Ok(decoded) = StockMarket::NewUser::decode_log(&inner_log, true) {
                     tracing::info!("👤 NewUser: {:?}", decoded.user);
                 }
+            } else {
+                tracing::warn!(
+                    "⚠️  Unknown event signature: {:?} (expected PriceUpdate: {:?}, Bought: {:?}, Sold: {:?}, NewUser: {:?})",
+                    topic0,
+                    StockMarket::PriceUpdate::SIGNATURE_HASH,
+                    StockMarket::Bought::SIGNATURE_HASH,
+                    StockMarket::Sold::SIGNATURE_HASH,
+                    StockMarket::NewUser::SIGNATURE_HASH
+                );
             }
         }
     }

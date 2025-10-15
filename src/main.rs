@@ -86,10 +86,10 @@ where
                     Ok(balance) => {
                         tracing::info!("Balance for {:?}: {} wei", addr, balance);
 
+                        let funding_amount = U256::from(500_000_000_000_000_000u64);
+
                         if balance == U256::ZERO {
                             tracing::info!("Balance is zero, funding account...");
-
-                            let funding_amount = U256::from(500_000_000_000_000_000u64);
 
                             tracing::info!(
                                 "Funding {:?} with {} wei (0.5 MON)",
@@ -128,14 +128,22 @@ where
                                                 }
                                             );
 
-                                            if !receipt.status() {
+                                            if receipt.status() {
+                                                let msg = ServerMessage::Funded {
+                                                    address: format!("{:?}", addr),
+                                                    amount: funding_amount.to::<u64>(),
+                                                };
+                                                let _ = broadcast_tx.send(msg);
+                                            } else {
                                                 let error_msg = format!(
                                                     "Funding transaction failed: {:?}",
                                                     tx_hash
                                                 );
                                                 tracing::error!("{}", error_msg);
-                                                let msg =
-                                                    ServerMessage::TxError { error: error_msg };
+                                                let msg = ServerMessage::FundError {
+                                                    address: format!("{:?}", addr),
+                                                    error: error_msg,
+                                                };
                                                 let _ = broadcast_tx.send(msg);
                                             }
                                         }
@@ -143,7 +151,10 @@ where
                                             let error_msg =
                                                 format!("Failed to get funding tx receipt: {}", e);
                                             tracing::error!("{}", error_msg);
-                                            let msg = ServerMessage::TxError { error: error_msg };
+                                            let msg = ServerMessage::FundError {
+                                                address: format!("{:?}", addr),
+                                                error: error_msg,
+                                            };
                                             let _ = broadcast_tx.send(msg);
                                         }
                                     }
@@ -151,10 +162,20 @@ where
                                 Err(e) => {
                                     let error_msg = format!("Failed to fund {:?}: {}", addr, e);
                                     tracing::error!("{}", error_msg);
-                                    let msg = ServerMessage::TxError { error: error_msg };
+                                    let msg = ServerMessage::FundError {
+                                        address: format!("{:?}", addr),
+                                        error: error_msg,
+                                    };
                                     let _ = broadcast_tx.send(msg);
                                 }
                             }
+                        } else {
+                            tracing::info!("Address already funded, sending Funded event");
+                            let msg = ServerMessage::Funded {
+                                address: format!("{:?}", addr),
+                                amount: balance.to::<u64>(),
+                            };
+                            let _ = broadcast_tx.send(msg);
                         }
                     }
                     Err(e) => {
@@ -245,8 +266,8 @@ async fn main() -> Result<()> {
 
     let register_gas = 115_000;
     tracing::info!("Register costs...");
-    let buy_gas = 42_000;
-    let sell_gas = 42_000;
+    let buy_gas = 35_529;
+    let sell_gas = 35_529;
 
     let gas_costs = GasCosts {
         register: register_gas,

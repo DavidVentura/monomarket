@@ -32,8 +32,6 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         amount: u64,
-        price: u64,
-        block_number: u64,
         balance: u64,
         holdings: u64,
     },
@@ -42,8 +40,6 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         amount: u64,
-        price: u64,
-        block_number: u64,
         balance: u64,
         holdings: u64,
     },
@@ -65,6 +61,17 @@ pub enum ServerMessage {
     NonceResponse {
         address: String,
         nonce: u64,
+    },
+    Funded {
+        address: String,
+        amount: u64,
+    },
+    FundError {
+        address: String,
+        error: String,
+    },
+    TxSubmitted {
+        tx_hash: String,
     },
 }
 
@@ -169,9 +176,6 @@ where
                                 Ok(addr) => {
                                     tracing::info!("Setting name: {} → {}", address, name);
 
-                                    let _ =
-                                        backend_tx_sender.send(BackendTxEvent::Fund(addr)).await;
-
                                     {
                                         let mut state_guard = state_clone.write().await;
                                         state_guard.names.insert(addr, name.clone());
@@ -182,6 +186,9 @@ where
                                         name,
                                     };
                                     let _ = broadcast_tx.send(msg);
+
+                                    let _ =
+                                        backend_tx_sender.send(BackendTxEvent::Fund(addr)).await;
                                 }
                                 Err(e) => {
                                     tracing::error!("Failed to parse address '{}': {}", address, e);
@@ -197,10 +204,13 @@ where
                             match raw_tx.parse::<Bytes>() {
                                 Ok(bytes) => match provider.send_raw_transaction(&bytes).await {
                                     Ok(pending_tx) => {
-                                        tracing::info!(
-                                            "Raw tx submitted: {:?}",
-                                            pending_tx.tx_hash()
-                                        );
+                                        let tx_hash = *pending_tx.tx_hash();
+                                        tracing::info!("📤 Raw tx submitted: {:?}", tx_hash);
+
+                                        let msg = ServerMessage::TxSubmitted {
+                                            tx_hash: format!("{:?}", tx_hash),
+                                        };
+                                        let _ = broadcast_tx.send(msg);
                                     }
                                     Err(e) => {
                                         let error_msg =
