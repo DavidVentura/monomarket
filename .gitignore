@@ -1,0 +1,8 @@
+/target
+/cache
+.env
+contract/script
+contract/test
+pkey
+pubkey
+privkey
