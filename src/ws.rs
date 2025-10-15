@@ -56,11 +56,8 @@ pub enum ServerMessage {
     },
     Position {
         address: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        name: Option<String>,
         balance: u64,
         holdings: u64,
-        current_price: u64,
     },
     TxError {
         error: String,
@@ -103,6 +100,7 @@ where
     T: Transport + Clone,
     P: Provider<T> + WalletProvider,
 {
+    let (client_tx, mut client_rx) = mpsc::channel::<ServerMessage>(100);
     let ws_stream = match accept_async(stream).await {
         Ok(ws) => ws,
         Err(e) => {
@@ -148,13 +146,10 @@ where
         );
         for (address, balance) in state_guard.balances.iter() {
             let holdings = state_guard.holdings.get(address).copied().unwrap_or(0);
-            let name = state_guard.names.get(address).cloned();
             let msg = ServerMessage::Position {
                 address: format!("{:?}", address),
-                name,
                 balance: *balance,
                 holdings,
-                current_price: state_guard.current_price,
             };
             let json = serde_json::to_string(&msg)?;
             ws_sender.send(Message::Text(json)).await?;
@@ -163,10 +158,21 @@ where
 
     let state_clone = state.clone();
     let send_task = tokio::spawn(async move {
-        while let Ok(msg) = broadcast_rx.recv().await {
-            if let Ok(json) = serde_json::to_string(&msg) {
-                if ws_sender.send(Message::Text(json)).await.is_err() {
-                    break;
+        loop {
+            tokio::select! {
+                Ok(msg) = broadcast_rx.recv() => {
+                    if let Ok(json) = serde_json::to_string(&msg) {
+                        if ws_sender.send(Message::Text(json)).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                Some(msg) = client_rx.recv() => {
+                    if let Ok(json) = serde_json::to_string(&msg) {
+                        if ws_sender.send(Message::Text(json)).await.is_err() {
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -214,7 +220,7 @@ where
                                         let msg = ServerMessage::TxSubmitted {
                                             tx_hash: format!("{:?}", tx_hash),
                                         };
-                                        let _ = broadcast_tx.send(msg);
+                                        let _ = client_tx.send(msg).await;
                                     }
                                     Err(e) => {
                                         let error_msg =
@@ -222,7 +228,7 @@ where
                                         tracing::error!("{}", error_msg);
 
                                         let msg = ServerMessage::TxError { error: error_msg };
-                                        let _ = broadcast_tx.send(msg);
+                                        let _ = client_tx.send(msg).await;
                                     }
                                 },
                                 Err(e) => {
@@ -230,7 +236,7 @@ where
                                     tracing::error!("{}", error_msg);
 
                                     let msg = ServerMessage::TxError { error: error_msg };
-                                    let _ = broadcast_tx.send(msg);
+                                    let _ = client_tx.send(msg).await;
                                 }
                             }
                         }
@@ -246,10 +252,9 @@ where
                                             address: format!("{:?}", addr),
                                             nonce,
                                         };
-                                        // TODO nonce should not broadcast
-                                        let _ = broadcast_tx.send(msg);
+                                        let _ = client_tx.send(msg).await;
                                         let _ = backend_tx_sender
-                                            .send(BackendTxEvent::Fund(addr))
+                                            .send(BackendTxEvent::Fund(addr, client_tx.clone()))
                                             .await;
                                     }
                                     Err(e) => {
@@ -257,7 +262,7 @@ where
                                         tracing::error!("{}", error_msg);
 
                                         let msg = ServerMessage::TxError { error: error_msg };
-                                        let _ = broadcast_tx.send(msg);
+                                        let _ = client_tx.send(msg).await;
                                     }
                                 }
                             }

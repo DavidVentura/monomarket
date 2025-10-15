@@ -22,10 +22,12 @@ mod contract {
 
 pub use contract::StockMarket;
 
-async fn handle_fund_event<T, P>(
+async fn handle_fund_event<'a, T, P>(
     provider: &P,
+    contract: &StockMarket::StockMarketInstance<T, &'a P>,
     addr: Address,
     broadcast_tx: &broadcast::Sender<ServerMessage>,
+    client_tx: &mpsc::Sender<ServerMessage>,
 ) -> Result<()>
 where
     T: Transport + Clone,
@@ -35,12 +37,22 @@ where
     tracing::info!("Balance for {:?}: {} wei", addr, balance);
 
     if balance > U256::ZERO {
-        tracing::info!("Address already funded, sending Funded event");
-        let msg = ServerMessage::Funded {
+        tracing::info!("Address already funded, reading holdings and sending Funded and Position events");
+        let holdings = contract.getHoldings(addr).call().await?;
+        let contract_balance = contract.getBalance(addr).call().await?;
+
+        let funded_msg = ServerMessage::Funded {
             address: format!("{:?}", addr),
             amount: balance.to::<u64>(),
         };
-        let _ = broadcast_tx.send(msg);
+        let _ = client_tx.send(funded_msg).await;
+
+        let position_msg = ServerMessage::Position {
+            address: format!("{:?}", addr),
+            balance: contract_balance._0.to::<u64>(),
+            holdings: holdings._0.to::<u64>(),
+        };
+        let _ = broadcast_tx.send(position_msg);
         return Ok(());
     }
 
@@ -78,11 +90,21 @@ where
     );
 
     if receipt.status() {
-        let msg = ServerMessage::Funded {
+        let holdings = contract.getHoldings(addr).call().await?;
+        let contract_balance = contract.getBalance(addr).call().await?;
+
+        let funded_msg = ServerMessage::Funded {
             address: format!("{:?}", addr),
             amount: funding_amount.to::<u64>(),
         };
-        let _ = broadcast_tx.send(msg);
+        let _ = client_tx.send(funded_msg).await;
+
+        let position_msg = ServerMessage::Position {
+            address: format!("{:?}", addr),
+            balance: contract_balance._0.to::<u64>(),
+            holdings: holdings._0.to::<u64>(),
+        };
+        let _ = broadcast_tx.send(position_msg);
     } else {
         let error_msg = format!("Funding transaction failed: {:?}", tx_hash);
         tracing::error!("{}", error_msg);
@@ -90,7 +112,7 @@ where
             address: format!("{:?}", addr),
             error: error_msg,
         };
-        let _ = broadcast_tx.send(msg);
+        let _ = client_tx.send(msg).await;
     }
 
     Ok(())
@@ -98,7 +120,6 @@ where
 
 async fn handle_tick_event<T, P>(
     contract: &StockMarket::StockMarketInstance<T, P>,
-    broadcast_tx: &broadcast::Sender<ServerMessage>,
 ) -> Result<()>
 where
     T: Transport + Clone,
@@ -123,8 +144,6 @@ where
     if !receipt.status() {
         let error_msg = format!("Tick transaction failed: {:?}", tx_hash);
         tracing::error!("{}", error_msg);
-        let msg = ServerMessage::TxError { error: error_msg };
-        let _ = broadcast_tx.send(msg);
     }
 
     Ok(())
@@ -146,25 +165,23 @@ where
     tracing::info!("Backend wallet address: {:?}", backend_addr);
     while let Some(event) = rx.recv().await {
         match event {
-            BackendTxEvent::Fund(addr) => {
+            BackendTxEvent::Fund(addr, client_tx) => {
                 tracing::info!("Processing Fund event for {:?}", addr);
-                if let Err(e) = handle_fund_event(&provider, addr, &broadcast_tx).await {
+                if let Err(e) = handle_fund_event(&provider, &contract, addr, &broadcast_tx, &client_tx).await {
                     let error_msg = format!("Failed to fund account: {}", e);
                     tracing::error!("{}", error_msg);
                     let msg = ServerMessage::FundError {
                         address: format!("{:?}", addr),
                         error: error_msg,
                     };
-                    let _ = broadcast_tx.send(msg);
+                    let _ = client_tx.send(msg).await;
                 }
             }
             BackendTxEvent::Tick => {
                 tracing::info!("Processing Tick event");
-                if let Err(e) = handle_tick_event(&contract, &broadcast_tx).await {
+                if let Err(e) = handle_tick_event(&contract).await {
                     let error_msg = format!("Failed to process tick: {}", e);
                     tracing::error!("{}", error_msg);
-                    let msg = ServerMessage::TxError { error: error_msg };
-                    let _ = broadcast_tx.send(msg);
                 }
             }
         }

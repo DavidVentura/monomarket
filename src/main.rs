@@ -23,9 +23,9 @@ use tokio::{
 };
 use ws::ServerMessage;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum BackendTxEvent {
-    Fund(Address),
+    Fund(Address, mpsc::Sender<ServerMessage>),
     Tick,
 }
 

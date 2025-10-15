@@ -37,10 +37,8 @@ export type ServerMessage =
   | {
       type: "position";
       address: string;
-      name?: string;
       balance: number;
       holdings: number;
-      current_price: number;
     }
   | { type: "tx_error"; error: string }
   | { type: "tx_submitted"; tx_hash: string };
@@ -56,6 +54,7 @@ export type State =
   | InitialState
   | WaitingServerParams
   | NeedsToRegister
+  | AwaitingRegistration
   | TradableState;
 
 export type InitialState = {
@@ -73,8 +72,11 @@ export type WaitingServerParams = {
     contract?: ethers.Contract;
     gasCosts?: GasInfo;
     nonce?: number;
+    balance?: number;
+    holdings?: number;
   };
 };
+
 export type NeedsToRegister = {
   name: "NeedsToRegister";
   state: {
@@ -83,7 +85,20 @@ export type NeedsToRegister = {
     contract: ethers.Contract;
     gasCosts: GasInfo;
     nonce: number;
-    name?: string;
+    balance: number;
+    holdings: number;
+  };
+};
+
+export type AwaitingRegistration = {
+  name: "AwaitingRegistration";
+  state: {
+    wallet: ethers.Wallet;
+    funds: number;
+    contract: ethers.Contract;
+    gasCosts: GasInfo;
+    nonce: number;
+    name: string;
   };
 };
 
@@ -96,6 +111,9 @@ export type TradableState = {
     gasCosts: GasInfo;
     nonce: number;
     name: string;
+    currentPrice: number;
+    balance: number;
+    holdings: number;
   };
 };
 

@@ -1,21 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { ethers } from "ethers";
 import type {
-  AppStatus,
+  AwaitingRegistration,
   ClientMessage,
-  GasInfo,
   InitialState,
   LogEntry,
   NeedsToRegister,
   ServerMessage,
   State,
+  TradableState,
   WaitingServerParams,
 } from "./types";
 import "./App.css";
 
 const WS_URL = "ws://localhost:8090";
 const CHAIN_ID = 30143n;
-const RECONNECT_DELAY = 100;
+const GAS_PRICE = 0x21d664903cn;
 
 const CONTRACT_ABI = [
   "function register() external",
@@ -23,26 +23,39 @@ const CONTRACT_ABI = [
   "function sell(uint256 amount) external",
 ];
 
-const send = async (ws: WebSocket, data: ClientMessage) => {
-  ws.send(JSON.stringify(data));
-};
-
 function App() {
   const [state, setState] = useState<State>({
     name: "InitialState",
     state: {},
   } satisfies InitialState);
 
-  console.log(state);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [nameInput, setNameInput] = useState<string>("");
+
+  const wsRef = useRef<WebSocket | null>(null);
+  const logsEndRef = useRef<HTMLDivElement>(null);
+
+  const addLog = (message: string, logType: LogEntry["logType"] = "info") => {
+    setLogs((prev) => [...prev, { timestamp: new Date(), message, logType }]);
+  };
+
+  const sendMessage = (msg: ClientMessage) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(msg));
+    }
+  };
+
   useEffect(() => {
     const privateKey = localStorage.getItem("wallet_privateKey");
     let loadedWallet: ethers.Wallet;
 
     if (privateKey) {
       loadedWallet = new ethers.Wallet(privateKey);
+      addLog(`Loaded wallet: ${loadedWallet.address}`, "info");
     } else {
       loadedWallet = new ethers.Wallet(ethers.Wallet.createRandom().privateKey);
       localStorage.setItem("wallet_privateKey", loadedWallet.privateKey);
+      addLog(`Created new wallet: ${loadedWallet.address}`, "info");
     }
 
     setState({
@@ -51,16 +64,20 @@ function App() {
     } satisfies WaitingServerParams);
 
     const ws = new WebSocket(WS_URL);
+    wsRef.current = ws;
 
     ws.onopen = async () => {
-      send(ws, { type: "get_nonce", address: loadedWallet.address });
+      addLog("Connected to server", "info");
+      sendMessage({ type: "get_nonce", address: loadedWallet.address });
     };
 
     ws.onmessage = async (event) => {
       const data: ServerMessage = JSON.parse(event.data);
-      console.log(data);
+      console.log("Server message:", data);
+
       switch (data.type) {
         case "funded": {
+          addLog(`Funded: ${data.amount} wei`, "info");
           setState((prev) => {
             if (prev.name !== "WaitingServerParams") return prev;
             return {
@@ -70,7 +87,9 @@ function App() {
           });
           break;
         }
+
         case "nonce_response": {
+          addLog(`Nonce received: ${data.nonce}`, "info");
           setState((prev) => {
             if (prev.name !== "WaitingServerParams") return prev;
             return {
@@ -80,7 +99,13 @@ function App() {
           });
           break;
         }
+
         case "connection_info": {
+          addLog(`Connected to contract: ${data.contract_address}`, "info");
+          addLog(
+            `Gas costs - register: ${data.gas_costs.register}, buy: ${data.gas_costs.buy}, sell: ${data.gas_costs.sell}`,
+            "info"
+          );
           setState((prev) => {
             if (prev.name !== "WaitingServerParams") return prev;
             const contract = new ethers.Contract(
@@ -100,7 +125,140 @@ function App() {
           });
           break;
         }
+
+        case "price_update": {
+          addLog(
+            `Price: ${data.old_price} → ${data.new_price} (block ${data.block_number})`,
+            "price"
+          );
+          setState((prev) => {
+            if (prev.name === "TradableState") {
+              return {
+                name: prev.name,
+                state: { ...prev.state, currentPrice: data.new_price },
+              };
+            }
+            return prev;
+          });
+          break;
+        }
+
+        case "bought": {
+          addLog(
+            `${data.name || data.user} bought ${data.amount} | Balance: ${
+              data.balance
+            }, Holdings: ${data.holdings}`,
+            "bought"
+          );
+          setState((prev) => {
+            if (
+              prev.name === "TradableState" &&
+              data.user.toLowerCase() ===
+                prev.state.wallet.address.toLowerCase()
+            ) {
+              return {
+                name: prev.name,
+                state: {
+                  ...prev.state,
+                  balance: data.balance,
+                  holdings: data.holdings,
+                },
+              };
+            }
+            return prev;
+          });
+          break;
+        }
+
+        case "sold": {
+          addLog(
+            `${data.name || data.user} sold ${data.amount} | Balance: ${
+              data.balance
+            }, Holdings: ${data.holdings}`,
+            "sold"
+          );
+          setState((prev) => {
+            if (
+              prev.name === "TradableState" &&
+              data.user.toLowerCase() ===
+                prev.state.wallet.address.toLowerCase()
+            ) {
+              return {
+                name: prev.name,
+                state: {
+                  ...prev.state,
+                  balance: data.balance,
+                  holdings: data.holdings,
+                },
+              };
+            }
+            return prev;
+          });
+          break;
+        }
+
+        case "name_set": {
+          addLog(`${data.address} → ${data.name}`, "name");
+          break;
+        }
+
+        case "position": {
+          addLog(
+            `${data.address} | Cash: ${data.balance}, Holdings: ${data.holdings}`,
+            "info"
+          );
+          setState((prev) => {
+            const isOurAddress =
+              data.address.toLowerCase() ===
+              (prev.name !== "InitialState"
+                ? prev.state.wallet.address.toLowerCase()
+                : null);
+
+            if (!isOurAddress) return prev;
+
+            if (prev.name === "WaitingServerParams") {
+              return {
+                name: prev.name,
+                state: {
+                  ...prev.state,
+                  balance: data.balance,
+                  holdings: data.holdings,
+                },
+              };
+            }
+            if (prev.name === "TradableState") {
+              return {
+                name: prev.name,
+                state: {
+                  ...prev.state,
+                  balance: data.balance,
+                  holdings: data.holdings,
+                },
+              };
+            }
+            return prev;
+          });
+          break;
+        }
+
+        case "tx_error": {
+          addLog(`TX Error: ${data.error}`, "error");
+          break;
+        }
+
+        case "tx_submitted": {
+          addLog(`TX submitted: ${data.tx_hash}`, "info");
+          break;
+        }
       }
+    };
+
+    ws.onerror = () => {
+      addLog("WebSocket error", "error");
+    };
+
+    ws.onclose = () => {
+      addLog("Disconnected from server", "info");
     };
 
     return () => {
@@ -114,281 +272,135 @@ function App() {
       state.state.contract &&
       state.state.funds &&
       state.state.gasCosts &&
-      state.state.nonce
+      state.state.nonce !== undefined &&
+      state.state.balance !== undefined &&
+      state.state.holdings !== undefined
     ) {
-      console.log("Moving on from Waiting");
-      setState((prev) => {
-        if (
-          prev.name === "WaitingServerParams" &&
-          prev.state.contract &&
-          prev.state.funds &&
-          prev.state.gasCosts &&
-          prev.state.nonce
-        ) {
-          return {
-            state: prev.state as NeedsToRegister["state"],
-            name: "NeedsToRegister",
-          } satisfies NeedsToRegister;
-        }
-        return prev;
-      });
+      console.log("Moving to NeedsToRegister");
+      setState({
+        state: {
+          wallet: state.state.wallet,
+          funds: state.state.funds,
+          contract: state.state.contract,
+          gasCosts: state.state.gasCosts,
+          nonce: state.state.nonce,
+          balance: state.state.balance,
+          holdings: state.state.holdings,
+        },
+        name: "NeedsToRegister",
+      } satisfies NeedsToRegister);
     }
-    console.log("new state", state);
   }, [state]);
 
-  return (
-    <div>
-      {/* <pre>{JSON.stringify(state, null, 2)}</pre> */}
-      {state.name === "NeedsToRegister" && <div>name pls</div>}
-      {state.name === "WaitingServerParams" && <div>waiting for server</div>}
-    </div>
-  );
-}
-
-/*
-function App() {
-  const [registered, setRegistered] = useState(false);
-  const [status, setStatus] = useState<AppStatus>("disconnected");
-  const [wallet, setWallet] = useState<ethers.Wallet | null>(null);
-  const [balance, setBalance] = useState<number>(0);
-  const [nonce, setNonce] = useState<number | null>(null);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [gasLimits, setGasLimits] = useState<GasInfo | null>(null);
-  const [contract, setContract] = useState<ethers.Contract | null>(null);
-  const [name, setName] = useState<string>("");
-
-  const wsRef = useRef<WebSocket | null>(null);
-  const logsEndRef = useRef<HTMLDivElement>(null);
-  const reconnectTimeoutRef = useRef<number | null>(null);
-  const walletRef = useRef<ethers.HDNodeWallet | ethers.Wallet | null>(null);
-
-  useEffect(() => {
-    if (registered) return;
-    if (nonce == null) return;
-    if (contract == null) return;
-    if (wallet == null) return;
-    console.log("nonce useffect");
-    const run = async () => {
-      console.log("nonce async");
-      await sendTx({ txType: "register" }, contract, wallet);
-      setRegistered(true);
-      addLog(`sent register request`);
-    };
-    run();
-  }, [nonce, registered, contract, wallet]);
-
-  useEffect(() => {
-    const privateKey = localStorage.getItem("wallet_privateKey");
-    let loadedWallet: ethers.Wallet;
-
-    if (privateKey) {
-      loadedWallet = new ethers.Wallet(privateKey);
-      addLog(`Loaded wallet: ${loadedWallet.address}`, "info");
-    } else {
-      loadedWallet = new ethers.Wallet(ethers.Wallet.createRandom().privateKey);
-      localStorage.setItem("wallet_privateKey", loadedWallet.privateKey);
-      addLog(`Created new wallet: ${loadedWallet.address}`, "info");
-    }
-
-    walletRef.current = loadedWallet;
-    setWallet(loadedWallet);
-    connectWebSocket();
-
-    return () => {
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-      wsRef.current?.close();
-    };
-  }, []);
-
-  const addLog = (message: string, logType: LogEntry["logType"] = "info") => {
-    setLogs((prev) => [...prev, { timestamp: new Date(), message, logType }]);
-  };
-
-  const sendMessage = (msg: ClientMessage) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(msg));
-    }
-  };
-
-  const connectWebSocket = () => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
-
-    addLog("Connecting to WebSocket...", "info");
-    const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      addLog("Connected to server", "info");
-      setStatus("connected");
-    };
-
-    ws.onmessage = async (event) => {
-      try {
-        const data: ServerMessage = JSON.parse(event.data);
-        await handleServerMessage(data);
-      } catch (e) {
-        addLog(`Failed to parse message: ${e}`, "error");
-      }
-    };
-
-    ws.onerror = () => {
-      addLog("WebSocket error", "error");
-    };
-
-    ws.onclose = () => {
-      addLog("Disconnected from server", "info");
-      setStatus("disconnected");
-      wsRef.current = null;
-
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-      reconnectTimeoutRef.current = window.setTimeout(() => {
-        addLog("Reconnecting...", "info");
-        connectWebSocket();
-      }, RECONNECT_DELAY);
-    };
-  };
-
-  const handleServerMessage = async (msg: ServerMessage) => {
-    switch (msg.type) {
-      case "connection_info":
-        setContract(
-          new ethers.Contract(msg.contract_address, CONTRACT_ABI, wallet)
-        );
-        setGasLimits(msg.gas_costs);
-        addLog(`Connected to contract ${msg.contract_address}`, "info");
-        addLog(
-          `Gas costs - register: ${msg.gas_costs.register}, buy: ${msg.gas_costs.buy}, sell: ${msg.gas_costs.sell}`,
-          "info"
-        );
-        break;
-
-      case "price_update":
-        addLog(
-          `Price: ${msg.old_price} → ${msg.new_price} (block ${msg.block_number})`,
-          "price"
-        );
-        break;
-
-      case "bought":
-        addLog(
-          `${msg.name || msg.user} bought ${msg.amount} | Balance: ${
-            msg.balance
-          }, Holdings: ${msg.holdings}`,
-          "bought"
-        );
-        break;
-
-      case "sold":
-        addLog(
-          `${msg.name || msg.user} sold ${msg.amount} | Balance: ${
-            msg.balance
-          }, Holdings: ${msg.holdings}`,
-          "sold"
-        );
-        break;
-
-      case "name_set":
-        addLog(`${msg.address} → ${msg.name}`, "name");
-        break;
-
-      case "position":
-        addLog(
-          `${msg.name || msg.address} | Cash: ${msg.balance}, Holdings: ${
-            msg.holdings
-          }, Price: ${msg.current_price}`,
-          "info"
-        );
-        break;
-
-      case "tx_error":
-        addLog(`TX Error: ${msg.error}`, "error");
-        break;
-
-      case "nonce_response":
-        const walletForNonce = walletRef.current;
-        if (
-          walletForNonce &&
-          msg.address.toLowerCase() === walletForNonce.address.toLowerCase()
-        ) {
-          setNonce(msg.nonce);
-          addLog(`Nonce received: ${msg.nonce}`, "info");
-        } else {
-          addLog(
-            `Nonce response ignored: received=${msg.address}, wallet=${walletForNonce?.address}`,
-            "error"
-          );
-        }
-        break;
-
-      case "funded":
-        addLog(`Funded: ${msg.address} with ${msg.amount} wei`, "info");
-        const currentWallet = walletRef.current;
-        if (
-          currentWallet &&
-          msg.address.toLowerCase() === currentWallet.address.toLowerCase()
-        ) {
-          setBalance(msg.amount);
-          setStatus("funded");
-          sendMessage({ type: "get_nonce", address: currentWallet.address });
-        } else {
-          addLog(
-            `Address mismatch: received=${msg.address}, wallet=${currentWallet?.address}`,
-            "error"
-          );
-        }
-        break;
-
-      case "fund_error":
-        addLog(`Fund error: ${msg.error}`, "error");
-        break;
-
-      case "tx_submitted":
-        addLog(`TX submitted: ${msg.tx_hash}`, "info");
-        break;
-    }
-  };
-
-  const handleSetName = () => {
-    const currentWallet = walletRef.current;
-    if (!currentWallet) {
-      addLog("Wallet not loaded", "error");
-      return;
-    }
-
-    if (!name.trim()) {
+  const handleSetName = async () => {
+    if (state.name !== "NeedsToRegister") return;
+    if (!nameInput.trim()) {
       addLog("Please enter a name", "error");
       return;
     }
 
+    const name = nameInput.trim();
     addLog(`Setting name: ${name}`, "info");
+
     sendMessage({
       type: "set_name",
-      name: name.trim(),
-      address: currentWallet.address,
+      name: name,
+      address: state.state.wallet.address,
     });
+
+    const { wallet, funds, contract, gasCosts, nonce, balance, holdings } = state.state;
+    const isAlreadyRegistered = balance > 0 || holdings > 0;
+
+    if (isAlreadyRegistered) {
+      addLog("Already registered, moving to trading", "info");
+      setState({
+        name: "TradableState",
+        state: {
+          wallet,
+          funds,
+          contract,
+          gasCosts,
+          nonce,
+          name,
+          currentPrice: 50,
+          balance,
+          holdings,
+        },
+      } satisfies TradableState);
+      return;
+    }
+
+    try {
+      const tx = await contract.register.populateTransaction();
+      const fullTx = {
+        ...tx,
+        nonce,
+        chainId: CHAIN_ID,
+        gasPrice: GAS_PRICE,
+        gasLimit: gasCosts.register,
+      };
+
+      const signedTx = await wallet.signTransaction(fullTx);
+      sendMessage({ type: "raw_tx", raw_tx: signedTx });
+
+      addLog("Register transaction sent", "info");
+
+      const gasCost = gasCosts.register * Number(GAS_PRICE);
+
+      setState({
+        name: "AwaitingRegistration",
+        state: {
+          wallet,
+          funds: funds - gasCost,
+          contract,
+          gasCosts,
+          nonce: nonce + 1,
+          name,
+        },
+      } satisfies AwaitingRegistration);
+    } catch (e) {
+      addLog(`Failed to send register transaction: ${e}`, "error");
+    }
   };
+
+  useEffect(() => {
+    if (state.name === "AwaitingRegistration") {
+      addLog("Registration pending...", "info");
+
+      // TODO: Listen for tx confirmation from contract events
+      // For now, assume registration succeeds immediately
+      setTimeout(() => {
+        addLog(
+          "Registration assumed successful (TODO: verify on-chain)",
+          "info"
+        );
+
+        setState({
+          name: "TradableState",
+          state: {
+            ...state.state,
+            currentPrice: 50,
+            balance: 1000,
+            holdings: 0,
+          },
+        } satisfies TradableState);
+      }, 1000);
+    }
+  }, [state]);
 
   type RawTx =
     | { txType: "buy" | "sell"; amount: number }
     | { txType: "register" };
-  const sendTx = async (
-    raw: RawTx,
-    contract: ethers.Contract,
-    wallet: ethers.Wallet
-  ) => {
-    if (nonce === null || !gasLimits) {
-      addLog(`Wallet not ready ${wallet} ${nonce} ${gasLimits}`, "error");
-      return;
-    }
 
-    const gasCost = gasLimits[raw.txType] * GAS_PRICE;
-    if (balance < gasCost) {
+  const sendTx = async (raw: RawTx) => {
+    if (state.name !== "TradableState") return;
+
+    const { wallet, contract, gasCosts, nonce, funds } = state.state;
+
+    const gasCost = gasCosts[raw.txType] * Number(GAS_PRICE);
+    if (funds < gasCost) {
       addLog(
-        `Insufficient balance. Need ${gasCost} wei, have ${balance} wei`,
+        `Insufficient balance. Need ${gasCost} wei, have ${funds} wei`,
         "error"
       );
       return;
@@ -405,14 +417,24 @@ function App() {
         nonce,
         chainId: CHAIN_ID,
         gasPrice: GAS_PRICE,
-        gasLimit: gasLimits[raw.txType],
+        gasLimit: gasCosts[raw.txType],
       };
 
       const signedTx = await wallet.signTransaction(fullTx);
       sendMessage({ type: "raw_tx", raw_tx: signedTx });
 
-      setNonce(nonce + 1);
-      setBalance(balance - gasCost);
+      setState((prev) => {
+        if (prev.name !== "TradableState") return prev;
+        return {
+          name: prev.name,
+          state: {
+            ...prev.state,
+            nonce: prev.state.nonce + 1,
+            funds: prev.state.funds - gasCost,
+          },
+        };
+      });
+
       if (raw.txType === "register") {
         addLog(`${raw.txType} transaction sent`);
       } else {
@@ -430,63 +452,85 @@ function App() {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
 
-  const canTrade = status === "funded" && gasLimits && nonce !== null;
-  const buyGasCost = gasLimits ? gasLimits.buy * GAS_PRICE : 0;
-  const sellGasCost = gasLimits ? gasLimits.sell * GAS_PRICE : 0;
-
-  console.log(canTrade, status, gasLimits, nonce);
   return (
     <div className="app">
       <header>
         <h1>MonoMarket</h1>
-        <div className={`status status-${status}`}>{status}</div>
+        <div className={`status status-${state.name}`}>{state.name}</div>
       </header>
 
       <div className="info-section">
         <div className="wallet-info">
-          <strong>Address:</strong> {wallet?.address || "Loading..."}
-          <div className="balance-info"></div>
+          <strong>Address:</strong>{" "}
+          {state.name !== "InitialState"
+            ? state.state.wallet?.address
+            : "Loading..."}
         </div>
-        {status === "funded" && (
+        {state.name === "TradableState" && (
           <div className="balance-info">
-            <strong>Balance:</strong>{" "}
-            {Math.trunc(balance / 100_000_000_000_000).toString()} (~
-            {Math.trunc(balance / buyGasCost)} txs left)
+            <strong>Balance:</strong> {state.state.balance} credits
+            <br />
+            <strong>Holdings:</strong> {state.state.holdings} shares
+            <br />
+            <strong>Price:</strong> {state.state.currentPrice}
+            <br />
+            <strong>Funds:</strong>{" "}
+            {Math.trunc(state.state.funds / 100_000_000_000_000).toString()} (~
+            {Math.trunc(
+              state.state.funds / (state.state.gasCosts.buy * Number(GAS_PRICE))
+            )}{" "}
+            txs left)
           </div>
         )}
       </div>
 
-      {status === "connected" && (
+      {state.name === "WaitingServerParams" && (
+        <div className="name-section">
+          <p>Waiting for server parameters...</p>
+        </div>
+      )}
+
+      {state.name === "NeedsToRegister" && (
         <div className="name-section">
           <input
             type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
+            value={nameInput}
+            onChange={(e) => setNameInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSetName()}
             placeholder="Enter your name"
             className="name-input"
             autoFocus
           />
           <button onClick={handleSetName} className="name-btn">
-            Set Name
+            Register
           </button>
         </div>
       )}
 
-      {status === "funded" && !!contract && !!wallet && (
+      {state.name === "AwaitingRegistration" && (
+        <div className="name-section">
+          <p>Registering as {state.state.name}...</p>
+        </div>
+      )}
+
+      {state.name === "TradableState" && (
         <div className="trading-section">
           <button
-            onClick={() =>
-              sendTx({ txType: "buy", amount: 1 }, contract, wallet)
+            onClick={() => sendTx({ txType: "buy", amount: 1 })}
+            disabled={
+              state.state.funds < state.state.gasCosts.buy * Number(GAS_PRICE)
             }
-            disabled={!canTrade || balance < buyGasCost}
             className="trade-btn buy-btn"
           >
             Buy 1
           </button>
           <button
             onClick={() => sendTx({ txType: "sell", amount: 1 })}
-            disabled={!canTrade || balance < sellGasCost}
+            disabled={
+              state.state.funds <
+                state.state.gasCosts.sell * Number(GAS_PRICE) ||
+              state.state.holdings < 1
+            }
             className="trade-btn sell-btn"
           >
             Sell 1
@@ -511,5 +555,5 @@ function App() {
     </div>
   );
 }
-*/
+
 export default App;

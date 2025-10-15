@@ -41,11 +41,12 @@ contract StockMarket {
 
     function register() external {
         UserData storage user = userData[msg.sender];
-        require(!user.isActive, "Already registered");
-        // forge-lint: disable-next-line(unsafe-typecast)
-        user.balance = uint128(INITIAL_CREDITS);
-        user.isActive = true;
-        activeAddresses.push(msg.sender);
+        if (!user.isActive) {
+            // forge-lint: disable-next-line(unsafe-typecast)
+            user.balance = uint128(INITIAL_CREDITS);
+            user.isActive = true;
+            activeAddresses.push(msg.sender);
+        }
         emit NewUser(msg.sender);
     }
 
