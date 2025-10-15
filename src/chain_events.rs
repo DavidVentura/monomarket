@@ -1,175 +1,91 @@
-use crate::{AppState, ServerMessage, StockMarket};
+use crate::{AppState, backend::StockMarket, ws::ServerMessage};
 use alloy::{rpc::types::Log, sol_types::SolEvent};
-use anyhow::Result;
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 
-pub async fn process_chain_events<S>(
-    mut stream: S,
+pub async fn process_chain_events(
+    mut stream: impl Stream<Item = Log> + Unpin,
     state: Arc<RwLock<AppState>>,
     broadcast_tx: broadcast::Sender<ServerMessage>,
-) -> Result<()>
-where
-    S: StreamExt<Item = Log> + Unpin,
-{
+) -> anyhow::Result<()> {
     while let Some(log) = stream.next().await {
-        let tx_hash = log.transaction_hash.unwrap_or_default();
-        let log_index = log.log_index.unwrap_or(0);
+        let key = (log.transaction_hash.unwrap(), log.log_index.unwrap());
 
         {
             let mut state_guard = state.write().await;
-            if state_guard.seen_logs.contains(&(tx_hash, log_index)) {
+            if state_guard.seen_logs.contains(&key) {
                 continue;
             }
-            state_guard.seen_logs.insert((tx_hash, log_index));
+            state_guard.seen_logs.insert(key);
         }
 
-        let topic0_opt = log.topic0().copied();
-        let inner_log = log.inner;
+        match log.topic0() {
+            Some(&StockMarket::PriceUpdate::SIGNATURE_HASH) => {
+                let event = StockMarket::PriceUpdate::decode_log(&log.inner, true)?;
+                let mut state_guard = state.write().await;
+                state_guard.current_price = event.newPrice.to();
 
-        if let Some(topic0) = topic0_opt {
-            tracing::debug!(
-                "Received event with topic0: {:?}, PriceUpdate: {:?}, Bought: {:?}, Sold: {:?}, NewUser: {:?}",
-                topic0,
-                StockMarket::PriceUpdate::SIGNATURE_HASH,
-                StockMarket::Bought::SIGNATURE_HASH,
-                StockMarket::Sold::SIGNATURE_HASH,
-                StockMarket::NewUser::SIGNATURE_HASH
-            );
-            if topic0 == StockMarket::PriceUpdate::SIGNATURE_HASH {
-                if let Ok(decoded) = StockMarket::PriceUpdate::decode_log(&inner_log, true) {
-                    let new_price = decoded.newPrice.to::<u64>();
+                let msg = ServerMessage::PriceUpdate {
+                    old_price: event.oldPrice.to(),
+                    new_price: event.newPrice.to(),
+                    block_number: event.blockNumber.to(),
+                };
+                let _ = broadcast_tx.send(msg);
+            }
+            Some(&StockMarket::Bought::SIGNATURE_HASH) => {
+                let event = StockMarket::Bought::decode_log(&log.inner, true)?;
+                let user_addr = event.user;
+                let amount: u64 = event.amount.to();
 
-                    tracing::info!(
-                        "📊 PriceUpdate: {} → {} (block: {})",
-                        decoded.oldPrice,
-                        new_price,
-                        decoded.blockNumber
-                    );
+                let mut state_guard = state.write().await;
+                state_guard
+                    .balances
+                    .insert(user_addr, event.newBalance.to());
+                state_guard
+                    .holdings
+                    .insert(user_addr, event.newHoldings.to());
+                let name = state_guard.names.get(&user_addr).cloned();
 
-                    {
-                        let mut state_guard = state.write().await;
-                        state_guard.current_price = new_price;
-                    }
+                let msg = ServerMessage::Bought {
+                    user: format!("{:?}", user_addr),
+                    name,
+                    amount,
+                    balance: event.newBalance.to(),
+                    holdings: event.newHoldings.to(),
+                };
+                let _ = broadcast_tx.send(msg);
+            }
+            Some(&StockMarket::Sold::SIGNATURE_HASH) => {
+                let event = StockMarket::Sold::decode_log(&log.inner, true)?;
+                let user_addr = event.user;
+                let amount: u64 = event.amount.to();
 
-                    let msg = ServerMessage::PriceUpdate {
-                        old_price: decoded.oldPrice.to::<u64>(),
-                        new_price,
-                        block_number: decoded.blockNumber.to::<u64>(),
-                    };
-                    let _ = broadcast_tx.send(msg);
-                }
-            } else if topic0 == StockMarket::Bought::SIGNATURE_HASH {
-                match StockMarket::Bought::decode_log(&inner_log, true) {
-                    Ok(decoded) => {
-                        let user_addr = decoded.user;
-                        let balance = decoded.newBalance.to::<u64>();
-                        let holdings = decoded.newHoldings.to::<u64>();
+                let mut state_guard = state.write().await;
+                state_guard
+                    .balances
+                    .insert(user_addr, event.newBalance.to());
+                state_guard
+                    .holdings
+                    .insert(user_addr, event.newHoldings.to());
+                let name = state_guard.names.get(&user_addr).cloned();
 
-                    let (name, current_price) = {
-                        let mut state_guard = state.write().await;
-                        state_guard.balances.insert(user_addr, balance);
-                        state_guard.holdings.insert(user_addr, holdings);
-                        (
-                            state_guard.names.get(&user_addr).cloned(),
-                            state_guard.current_price,
-                        )
-                    };
-
-                    tracing::info!(
-                        "💰 Bought: user={:?}, amount={}, balance={}, holdings={}",
-                        user_addr,
-                        decoded.amount,
-                        balance,
-                        holdings,
-                    );
-
-                    let msg = ServerMessage::Bought {
-                        user: format!("{:?}", user_addr),
-                        name: name.clone(),
-                        amount: decoded.amount.to::<u64>(),
-                        balance,
-                        holdings,
-                    };
-                        let _ = broadcast_tx.send(msg);
-
-                        let position_msg = ServerMessage::Position {
-                            address: format!("{:?}", user_addr),
-                            name,
-                            balance,
-                            holdings,
-                            current_price,
-                        };
-                        let _ = broadcast_tx.send(position_msg);
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to decode Bought event: {}", e);
-                    }
-                }
-            } else if topic0 == StockMarket::Sold::SIGNATURE_HASH {
-                match StockMarket::Sold::decode_log(&inner_log, true) {
-                    Ok(decoded) => {
-                        let user_addr = decoded.user;
-                        let balance = decoded.newBalance.to::<u64>();
-                        let holdings = decoded.newHoldings.to::<u64>();
-
-                        let (name, current_price) = {
-                            let mut state_guard = state.write().await;
-                            state_guard.balances.insert(user_addr, balance);
-                            state_guard.holdings.insert(user_addr, holdings);
-                            (
-                                state_guard.names.get(&user_addr).cloned(),
-                                state_guard.current_price,
-                            )
-                        };
-
-                        tracing::info!(
-                            "💸 Sold: user={:?}, amount={}, balance={}, holdings={}",
-                            user_addr,
-                            decoded.amount,
-                            balance,
-                            holdings
-                        );
-
-                        let msg = ServerMessage::Sold {
-                            user: format!("{:?}", user_addr),
-                            name: name.clone(),
-                            amount: decoded.amount.to::<u64>(),
-                            balance,
-                            holdings,
-                        };
-                        let _ = broadcast_tx.send(msg);
-
-                        let position_msg = ServerMessage::Position {
-                            address: format!("{:?}", user_addr),
-                            name,
-                            balance,
-                            holdings,
-                            current_price,
-                        };
-                        let _ = broadcast_tx.send(position_msg);
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to decode Sold event: {}", e);
-                    }
-                }
-            } else if topic0 == StockMarket::NewUser::SIGNATURE_HASH {
-                if let Ok(decoded) = StockMarket::NewUser::decode_log(&inner_log, true) {
-                    tracing::info!("👤 NewUser: {:?}", decoded.user);
-                }
-            } else {
-                tracing::warn!(
-                    "⚠️  Unknown event signature: {:?} (expected PriceUpdate: {:?}, Bought: {:?}, Sold: {:?}, NewUser: {:?})",
-                    topic0,
-                    StockMarket::PriceUpdate::SIGNATURE_HASH,
-                    StockMarket::Bought::SIGNATURE_HASH,
-                    StockMarket::Sold::SIGNATURE_HASH,
-                    StockMarket::NewUser::SIGNATURE_HASH
-                );
+                let msg = ServerMessage::Sold {
+                    user: format!("{:?}", user_addr),
+                    name,
+                    amount,
+                    balance: event.newBalance.to(),
+                    holdings: event.newHoldings.to(),
+                };
+                let _ = broadcast_tx.send(msg);
+            }
+            Some(other) => {
+                tracing::error!("Unexpected event {other:?}");
+            }
+            None => {
+                tracing::error!("Unexpected None");
             }
         }
     }
-
     Ok(())
 }

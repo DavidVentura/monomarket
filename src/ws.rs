@@ -1,10 +1,17 @@
 use crate::{AppState, BackendTxEvent, GasCosts};
-use alloy::{primitives::{Address, Bytes}, providers::{Provider, WalletProvider}, transports::Transport};
+use alloy::{
+    primitives::{Address, Bytes},
+    providers::{Provider, WalletProvider},
+    transports::Transport,
+};
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::{net::TcpStream, sync::{broadcast, mpsc, RwLock}};
+use tokio::{
+    net::TcpStream,
+    sync::{RwLock, broadcast, mpsc},
+};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -186,9 +193,6 @@ where
                                         name,
                                     };
                                     let _ = broadcast_tx.send(msg);
-
-                                    let _ =
-                                        backend_tx_sender.send(BackendTxEvent::Fund(addr)).await;
                                 }
                                 Err(e) => {
                                     tracing::error!("Failed to parse address '{}': {}", address, e);
@@ -242,7 +246,11 @@ where
                                             address: format!("{:?}", addr),
                                             nonce,
                                         };
+                                        // TODO nonce should not broadcast
                                         let _ = broadcast_tx.send(msg);
+                                        let _ = backend_tx_sender
+                                            .send(BackendTxEvent::Fund(addr))
+                                            .await;
                                     }
                                     Err(e) => {
                                         let error_msg = format!("Failed to get nonce: {}", e);

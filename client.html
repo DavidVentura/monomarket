@@ -351,13 +351,7 @@
                 updateStatus(true);
 
                 if (wallet) {
-                    setTimeout(() => {
-                        getNonce();
-                        const name = document.getElementById('nameInput').value;
-                        if (name) {
-                            setName();
-                        }
-                    }, 100);
+                    getNonce();
                 }
             };
 
@@ -409,12 +403,12 @@
 
                 case 'bought':
                     const buyerName = data.name || 'Unknown';
-                    log(`💰 BOUGHT: ${buyerName} (${data.user}) bought ${data.amount} @ ${data.price} | Balance: ${data.balance}, Holdings: ${data.holdings}`, 'bought');
+                    log(`💰 BOUGHT: ${buyerName} (${data.user}) bought ${data.amount} | Balance: ${data.balance}, Holdings: ${data.holdings}`, 'bought');
                     break;
 
                 case 'sold':
                     const sellerName = data.name || 'Unknown';
-                    log(`💸 SOLD: ${sellerName} (${data.user}) sold ${data.amount} @ ${data.price} | Balance: ${data.balance}, Holdings: ${data.holdings}`, 'sold');
+                    log(`💸 SOLD: ${sellerName} (${data.user}) sold ${data.amount} | Balance: ${data.balance}, Holdings: ${data.holdings}`, 'sold');
                     break;
 
                 case 'name_set':
@@ -433,6 +427,22 @@
                 case 'nonce_response':
                     currentNonce = data.nonce;
                     log(`✅ Nonce received: ${currentNonce}`, 'info');
+                    break;
+
+                case 'funded':
+                    log(`💰 FUNDED: ${data.address} received ${data.amount} wei`, 'info');
+                    if (wallet && data.address.toLowerCase() === wallet.address.toLowerCase()) {
+                        log('💳 Auto-registering after funding...', 'info');
+                        sendRegisterTx();
+                    }
+                    break;
+
+                case 'fund_error':
+                    log(`❌ FUND ERROR: ${data.address} - ${data.error}`, 'info');
+                    break;
+
+                case 'tx_submitted':
+                    log(`📤 TX SUBMITTED: ${data.tx_hash}`, 'info');
                     break;
 
                 default:
@@ -460,7 +470,7 @@
             log(`Requesting nonce for ${wallet.address}...`, 'info');
         }
 
-        async function setName() {
+        async function sendRegisterTx() {
             if (!ws || ws.readyState !== WebSocket.OPEN) {
                 log('Not connected!', 'info');
                 return;
@@ -478,12 +488,6 @@
 
             if (!gasLimits.register) {
                 log('Gas limits not loaded. Please wait for connection info.', 'info');
-                return;
-            }
-
-            const name = document.getElementById('nameInput').value;
-            if (!name) {
-                log('Please enter a name', 'info');
                 return;
             }
 
@@ -508,17 +512,35 @@
                 ws.send(JSON.stringify(rawTxMessage));
                 currentNonce++;
                 log(`Register transaction sent (next nonce: ${currentNonce})`, 'info');
-
-                const nameMessage = {
-                    type: 'set_name',
-                    name: name,
-                    address: wallet.address
-                };
-                ws.send(JSON.stringify(nameMessage));
-                log(`Name set to: ${name}`, 'name');
             } catch (e) {
                 log(`Failed to create register transaction: ${e.message}`, 'info');
             }
+        }
+
+        async function setName() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('Not connected!', 'info');
+                return;
+            }
+
+            if (!wallet) {
+                log('Please generate or load a wallet first', 'info');
+                return;
+            }
+
+            const name = document.getElementById('nameInput').value;
+            if (!name) {
+                log('Please enter a name', 'info');
+                return;
+            }
+
+            const nameMessage = {
+                type: 'set_name',
+                name: name,
+                address: wallet.address
+            };
+            ws.send(JSON.stringify(nameMessage));
+            log(`Name set to: ${name}, waiting for funding...`, 'name');
         }
 
         function clearConsole() {

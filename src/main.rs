@@ -1,13 +1,13 @@
+mod backend;
 mod chain_events;
 mod ws;
 
 use alloy::{
-    network::{EthereumWallet, TransactionBuilder},
-    primitives::{Address, TxHash, U256},
+    network::EthereumWallet,
+    primitives::{Address, TxHash},
     providers::{Provider, ProviderBuilder, WalletProvider, WsConnect},
-    rpc::types::{Filter, Log, TransactionRequest},
+    rpc::types::{Filter, Log},
     signers::local::PrivateKeySigner,
-    sol,
     transports::Transport,
 };
 use anyhow::Result;
@@ -22,13 +22,6 @@ use tokio::{
     sync::{RwLock, broadcast, mpsc},
 };
 use ws::ServerMessage;
-
-sol!(
-    #[allow(missing_docs)]
-    #[sol(rpc)]
-    StockMarket,
-    "contract/out/StockMarket.sol/StockMarket.json"
-);
 
 #[derive(Debug, Clone)]
 pub enum BackendTxEvent {
@@ -57,181 +50,10 @@ impl AppState {
 }
 
 #[derive(Debug, Clone)]
-struct GasCosts {
-    register: u64,
-    buy: u64,
-    sell: u64,
-}
-
-async fn backend_tx_executor<T, P>(
-    mut rx: mpsc::Receiver<BackendTxEvent>,
-    provider: P,
-    contract_addr: Address,
-    broadcast_tx: broadcast::Sender<ServerMessage>,
-) -> Result<()>
-where
-    T: Transport + Clone,
-    P: Provider<T> + WalletProvider,
-{
-    let contract = StockMarket::new(contract_addr, &provider);
-
-    let backend_addr = provider.default_signer_address();
-    tracing::info!("Backend wallet address: {:?}", backend_addr);
-    while let Some(event) = rx.recv().await {
-        match event {
-            BackendTxEvent::Fund(addr) => {
-                tracing::info!("Processing Fund event for {:?}", addr);
-
-                match provider.get_balance(addr).await {
-                    Ok(balance) => {
-                        tracing::info!("Balance for {:?}: {} wei", addr, balance);
-
-                        let funding_amount = U256::from(500_000_000_000_000_000u64);
-
-                        if balance == U256::ZERO {
-                            tracing::info!("Balance is zero, funding account...");
-
-                            tracing::info!(
-                                "Funding {:?} with {} wei (0.5 MON)",
-                                addr,
-                                funding_amount
-                            );
-
-                            let gas_price = U256::from(0x21d664903cu64);
-                            let gas_limit = 25_000u64; // experimentally obtained 25k gas
-                            tracing::info!(
-                                "Gas cost for funding tx: {} wei",
-                                gas_price * U256::from(gas_limit)
-                            );
-
-                            let tx = TransactionRequest::default()
-                                .to(addr)
-                                .value(funding_amount)
-                                .with_gas_limit(gas_limit)
-                                .with_gas_price(gas_price.to::<u128>());
-
-                            match provider.send_transaction(tx).await {
-                                Ok(pending) => {
-                                    let tx_hash = *pending.tx_hash();
-                                    tracing::info!("📤 Funding tx sent: {:?}", tx_hash);
-
-                                    match pending.get_receipt().await {
-                                        Ok(receipt) => {
-                                            tracing::info!(
-                                                "✅ Funding tx confirmed: {:?} (block: {}, status: {})",
-                                                tx_hash,
-                                                receipt.block_number.unwrap_or_default(),
-                                                if receipt.status() {
-                                                    "success"
-                                                } else {
-                                                    "failed"
-                                                }
-                                            );
-
-                                            if receipt.status() {
-                                                let msg = ServerMessage::Funded {
-                                                    address: format!("{:?}", addr),
-                                                    amount: funding_amount.to::<u64>(),
-                                                };
-                                                let _ = broadcast_tx.send(msg);
-                                            } else {
-                                                let error_msg = format!(
-                                                    "Funding transaction failed: {:?}",
-                                                    tx_hash
-                                                );
-                                                tracing::error!("{}", error_msg);
-                                                let msg = ServerMessage::FundError {
-                                                    address: format!("{:?}", addr),
-                                                    error: error_msg,
-                                                };
-                                                let _ = broadcast_tx.send(msg);
-                                            }
-                                        }
-                                        Err(e) => {
-                                            let error_msg =
-                                                format!("Failed to get funding tx receipt: {}", e);
-                                            tracing::error!("{}", error_msg);
-                                            let msg = ServerMessage::FundError {
-                                                address: format!("{:?}", addr),
-                                                error: error_msg,
-                                            };
-                                            let _ = broadcast_tx.send(msg);
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    let error_msg = format!("Failed to fund {:?}: {}", addr, e);
-                                    tracing::error!("{}", error_msg);
-                                    let msg = ServerMessage::FundError {
-                                        address: format!("{:?}", addr),
-                                        error: error_msg,
-                                    };
-                                    let _ = broadcast_tx.send(msg);
-                                }
-                            }
-                        } else {
-                            tracing::info!("Address already funded, sending Funded event");
-                            let msg = ServerMessage::Funded {
-                                address: format!("{:?}", addr),
-                                amount: balance.to::<u64>(),
-                            };
-                            let _ = broadcast_tx.send(msg);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to check balance for {:?}: {}", addr, e);
-                    }
-                }
-            }
-            BackendTxEvent::Tick => {
-                tracing::info!("Processing Tick event");
-
-                match contract.tick().send().await {
-                    Ok(pending) => {
-                        let tx_hash = *pending.tx_hash();
-                        tracing::info!("📤 Tick tx sent: {:?}", tx_hash);
-
-                        match pending.get_receipt().await {
-                            Ok(receipt) => {
-                                tracing::info!(
-                                    "✅ Tick tx confirmed: {:?} (block: {}, status: {})",
-                                    tx_hash,
-                                    receipt.block_number.unwrap_or_default(),
-                                    if receipt.status() {
-                                        "success"
-                                    } else {
-                                        "failed"
-                                    }
-                                );
-
-                                if !receipt.status() {
-                                    let error_msg =
-                                        format!("Tick transaction failed: {:?}", tx_hash);
-                                    tracing::error!("{}", error_msg);
-                                    let msg = ServerMessage::TxError { error: error_msg };
-                                    let _ = broadcast_tx.send(msg);
-                                }
-                            }
-                            Err(e) => {
-                                let error_msg = format!("Failed to get tick tx receipt: {}", e);
-                                tracing::error!("{}", error_msg);
-                                let msg = ServerMessage::TxError { error: error_msg };
-                                let _ = broadcast_tx.send(msg);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        let error_msg = format!("Failed to send tick transaction: {}", e);
-                        tracing::error!("{}", error_msg);
-                        let msg = ServerMessage::TxError { error: error_msg };
-                        let _ = broadcast_tx.send(msg);
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(())
+pub struct GasCosts {
+    pub register: u64,
+    pub buy: u64,
+    pub sell: u64,
 }
 
 #[tokio::main]
@@ -289,7 +111,7 @@ async fn main() -> Result<()> {
     let provider_write_clone = provider_write.clone();
     let broadcast_tx_clone = broadcast_tx.clone();
     tokio::spawn(async move {
-        if let Err(e) = backend_tx_executor(
+        if let Err(e) = backend::backend_tx_executor(
             backend_tx_receiver,
             provider_write_clone,
             contract_addr,
