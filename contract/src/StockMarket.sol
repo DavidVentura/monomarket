@@ -63,10 +63,10 @@ contract StockMarket {
         )));
 
         // forge-lint: disable-next-line(unsafe-typecast)
-        int256 changePercent = int256(randomSeed % 21) - 10;
+        int256 change = int256(randomSeed % 21) - 10;
 
         // forge-lint: disable-next-line(unsafe-typecast)
-        int256 newPriceInt = int256(price) + (int256(price) * changePercent) / 100;
+        int256 newPriceInt = int256(price) + change;
 
         // forge-lint: disable-next-line(unsafe-typecast)
         if (newPriceInt < int256(MIN_PRICE)) {
