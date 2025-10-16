@@ -6,7 +6,7 @@ contract StockMarket {
     uint256 public lastTickBlock;
 
     uint256 public constant INITIAL_CREDITS = 1000;
-    uint256 public constant MIN_PRICE = 0;
+    uint256 public constant MIN_PRICE = 1;
     uint256 public constant MAX_PRICE = 100;
 
     struct UserData {
@@ -50,9 +50,7 @@ contract StockMarket {
     }
 
     function tick() external {
-        if (lastTickBlock >= block.number) {
-            return;
-        }
+        require(lastTickBlock < block.number, "Already ticked this block");
         lastTickBlock = block.number;
 
         uint256 randomSeed = uint256(keccak256(abi.encodePacked(
@@ -71,12 +69,12 @@ contract StockMarket {
         // forge-lint: disable-next-line(unsafe-typecast)
         if (newPriceInt < int256(MIN_PRICE)) {
             // forge-lint: disable-next-line(unsafe-typecast)
-            newPriceInt = int256(MIN_PRICE);
+            newPriceInt = -newPriceInt;
         }
         // forge-lint: disable-next-line(unsafe-typecast)
         if (newPriceInt > int256(MAX_PRICE)) {
             // forge-lint: disable-next-line(unsafe-typecast)
-            newPriceInt = int256(MAX_PRICE);
+            newPriceInt = int256(MAX_PRICE) * 2 - newPriceInt;
         }
 
         // forge-lint: disable-next-line(unsafe-typecast)
