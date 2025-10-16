@@ -94,7 +94,14 @@ where
     let tx_hash = *pending.tx_hash();
     tracing::info!("📤 Funding tx sent: {:?} (nonce: {})", tx_hash, nonce);
 
-    let receipt = pending.get_receipt().await?;
+    let receipt = loop {
+        match provider.get_transaction_receipt(tx_hash).await? {
+            Some(receipt) => break receipt,
+            None => {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+        }
+    };
     tracing::info!(
         "✅ Funding tx confirmed: {:?} (block: {}, status: {})",
         tx_hash,
