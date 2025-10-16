@@ -141,15 +141,17 @@ where
         nonce
     };
 
-    let gas_price = U256::from(0x21d664903cu64);
-    let gas_limit = 40_000u64;
+    let max_fee_per_gas = U256::from(0x21d664903cu64);
+    let max_priority_fee = U256::from(1_000_000_000u64);
+    let gas_limit = 50_000u64;
 
     let call = contract.tick();
     let tx_req = call
         .into_transaction_request()
         .with_nonce(nonce)
         .with_gas_limit(gas_limit)
-        .with_gas_price(gas_price.to::<u128>());
+        .with_max_fee_per_gas(max_fee_per_gas.to::<u128>())
+        .with_max_priority_fee_per_gas(max_priority_fee.to::<u128>());
 
     let pending = provider.send_transaction(tx_req).await?;
     let tx_hash = *pending.tx_hash();
@@ -201,6 +203,51 @@ where
                 if let Err(e) = handle_tick_event(&provider, &contract, state.clone()).await {
                     let error_msg = format!("Failed to process tick: {}", e);
                     tracing::error!("{}", error_msg);
+
+                    if error_msg.contains("Already ticked this block") {
+                        tracing::debug!("Block was already ticked (race condition, expected)");
+                    } else if error_msg.contains("higher priority") {
+                        tracing::warn!("⚠️  Higher priority transaction exists, jumping nonce +20");
+                        let mut state_guard = state.write().await;
+                        let old_nonce = state_guard.backend_nonce;
+                        state_guard.backend_nonce += 20;
+                        tracing::info!(
+                            "✅ Nonce jumped: {} -> {} (skipping stuck transactions)",
+                            old_nonce,
+                            state_guard.backend_nonce
+                        );
+                    } else {
+                        tracing::warn!(
+                            "⚠️  Tick transaction failed, resyncing nonce from chain..."
+                        );
+                        let backend_address = provider.default_signer_address();
+                        match provider.get_transaction_count(backend_address).await {
+                            Ok(chain_nonce) => {
+                                let mut state_guard = state.write().await;
+                                let old_nonce = state_guard.backend_nonce;
+
+                                if chain_nonce > old_nonce {
+                                    state_guard.backend_nonce = chain_nonce;
+                                    tracing::info!(
+                                        "✅ Nonce resynced upward: {} -> {} (next block will retry)",
+                                        old_nonce,
+                                        chain_nonce
+                                    );
+                                } else if chain_nonce == old_nonce {
+                                    tracing::info!("✅ Nonce already in sync: {}", chain_nonce);
+                                } else {
+                                    tracing::warn!(
+                                        "⚠️  Chain nonce ({}) < local nonce ({}), keeping local (transactions pending)",
+                                        chain_nonce,
+                                        old_nonce
+                                    );
+                                }
+                            }
+                            Err(nonce_err) => {
+                                tracing::error!("Failed to fetch nonce from chain: {}", nonce_err);
+                            }
+                        }
+                    }
                 }
             }
         }
