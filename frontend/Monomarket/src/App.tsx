@@ -231,6 +231,16 @@ function App() {
                 },
               };
             }
+            if (prev.name === "NeedsToRegister") {
+              return {
+                name: prev.name,
+                state: {
+                  ...prev.state,
+                  balance: data.balance,
+                  holdings: data.holdings,
+                },
+              };
+            }
             if (prev.name === "AwaitingRegistration") {
               addLog("Registration confirmed!", "info");
               return {
@@ -300,6 +310,8 @@ function App() {
           gasCosts: state.state.gasCosts,
           nonce: state.state.nonce,
           currentPrice: state.state.currentPrice,
+          balance: state.state.balance,
+          holdings: state.state.holdings,
         },
         name: "NeedsToRegister",
       } satisfies NeedsToRegister);
