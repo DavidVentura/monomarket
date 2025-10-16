@@ -46,6 +46,7 @@ function App() {
 
   const wsRef = useRef<WebSocket | null>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const prevHoldingsRef = useRef<Map<string, number>>(new Map());
 
   const addLog = (message: string, logType: LogEntry["logType"] = "info") => {
     setLogs((prev) => [...prev, { timestamp: new Date(), message, logType }]);
@@ -89,7 +90,7 @@ function App() {
 
       switch (data.type) {
         case "funded": {
-          addLog(`Funded: ${data.amount} wei`, "info");
+          console.log(`Funded: ${data.amount} wei`);
           setState((prev) => {
             if (prev.name !== "WaitingServerParams") return prev;
             return {
@@ -101,7 +102,7 @@ function App() {
         }
 
         case "nonce_response": {
-          addLog(`Nonce received: ${data.nonce}`, "info");
+          console.log(`Nonce received: ${data.nonce}`);
           setState((prev) => {
             if (prev.name !== "WaitingServerParams") return prev;
             return {
@@ -113,10 +114,9 @@ function App() {
         }
 
         case "connection_info": {
-          addLog(`Connected to contract: ${data.contract_address}`, "info");
-          addLog(
-            `Gas costs - register: ${data.gas_costs.register}, buy: ${data.gas_costs.buy}, sell: ${data.gas_costs.sell}`,
-            "info"
+          console.log(`Connected to contract: ${data.contract_address}`);
+          console.log(
+            `Gas costs - register: ${data.gas_costs.register}, buy: ${data.gas_costs.buy}, sell: ${data.gas_costs.sell}`
           );
           setState((prev) => {
             if (prev.name !== "WaitingServerParams") return prev;
@@ -139,10 +139,6 @@ function App() {
         }
 
         case "price_update": {
-          addLog(
-            `Price: ${data.new_price} (block ${data.block_number})`,
-            "price"
-          );
           setState((prev) => {
             if (prev.name === "WaitingServerParams") {
               return {
@@ -162,7 +158,10 @@ function App() {
                 price: data.new_price,
                 timestamp: new Date(),
               };
-              const updatedHistory = [...prev.state.priceHistory, newPricePoint];
+              const updatedHistory = [
+                ...prev.state.priceHistory,
+                newPricePoint,
+              ];
               const limitedHistory = updatedHistory.slice(-200);
 
               return {
@@ -180,7 +179,6 @@ function App() {
         }
 
         case "current_price": {
-          addLog(`Current price: ${data.price}`, "price");
           setState((prev) => {
             if (prev.name === "WaitingServerParams") {
               return {
@@ -206,7 +204,7 @@ function App() {
         }
 
         case "name_set": {
-          addLog(`${data.address} → ${data.name}`, "name");
+          addLog(`${data.name} joined`, "info");
           setNames((prev) =>
             new Map(prev).set(data.address.toLowerCase(), data.name)
           );
@@ -214,13 +212,24 @@ function App() {
         }
 
         case "position": {
-          addLog(
-            `${data.address} | Cash: ${data.balance}, Holdings: ${data.holdings}`,
-            "info"
-          );
+          const addressLower = data.address.toLowerCase();
+          const previousHoldings = prevHoldingsRef.current.get(addressLower);
+          const playerName = names.get(addressLower) || "Unknown";
+
+          if (previousHoldings !== undefined) {
+            const holdingsDiff = data.holdings - previousHoldings;
+            if (holdingsDiff > 0) {
+              addLog(`${playerName} bought`, "info");
+            } else if (holdingsDiff < 0) {
+              addLog(`${playerName} sold`, "info");
+            }
+            console.log(`Position update for ${playerName}: ${previousHoldings} → ${data.holdings} (diff: ${holdingsDiff})`);
+          }
+
+          prevHoldingsRef.current.set(addressLower, data.holdings);
 
           setCurrentPortfolio((prev) =>
-            new Map(prev).set(data.address.toLowerCase(), {
+            new Map(prev).set(addressLower, {
               balance: data.balance,
               holdings: data.holdings,
             })
@@ -293,7 +302,7 @@ function App() {
         }
 
         case "tx_submitted": {
-          addLog(`TX submitted: ${data.tx_hash}`, "info");
+          console.log(`TX submitted: ${data.tx_hash}`);
           break;
         }
       }
@@ -346,7 +355,7 @@ function App() {
     }
 
     const name = nameInput.trim();
-    addLog(`Setting name: ${name}`, "info");
+    console.log(`Setting name: ${name}`);
 
     sendMessage({
       type: "set_name",
@@ -370,7 +379,7 @@ function App() {
       (balance > 0 || holdings > 0);
 
     if (isAlreadyRegistered) {
-      addLog("Already registered, moving to trading", "info");
+      console.log("Already registered, moving to trading");
       const initialPricePoint: PricePoint = {
         blockNumber: 0,
         price: currentPrice,
@@ -477,13 +486,8 @@ function App() {
         };
       });
 
-      if (raw.txType === "register") {
-        addLog(`${raw.txType} transaction sent`);
-      } else {
-        addLog(
-          `${raw.txType} transaction sent: ${raw.amount} shares`,
-          raw.txType === "buy" ? "bought" : "sold"
-        );
+      if (raw.txType !== "register") {
+        console.log(`${raw.txType} transaction sent: ${raw.amount} shares`);
       }
     } catch (e) {
       addLog(`Failed to send ${raw.txType} transaction: ${e}`, "error");
@@ -513,8 +517,6 @@ function App() {
             <strong>Balance:</strong> {state.state.balance} credits
             <br />
             <strong>Holdings:</strong> {state.state.holdings} shares
-            <br />
-            <strong>Price:</strong> {state.state.currentPrice}
             <br />
             <strong>Funds:</strong>{" "}
             {Math.trunc(state.state.funds / 100_000_000_000_000).toString()} (~
@@ -615,7 +617,7 @@ function App() {
               }
               className="trade-btn buy-btn"
             >
-              Buy 1
+              Buy
             </button>
             <button
               onClick={() => sendTx({ txType: "sell", amount: 1 })}
@@ -626,7 +628,7 @@ function App() {
               }
               className="trade-btn sell-btn"
             >
-              Sell 1
+              Sell
             </button>
           </div>
         </>
@@ -647,7 +649,10 @@ function App() {
             <tbody>
               {Array.from(currentPortfolio.entries())
                 .map(([address, portfolio]) => {
-                  const price = state.state.currentPrice || 50;
+                  const price =
+                    state.state.currentPrice === undefined
+                      ? 50
+                      : state.state.currentPrice;
                   const netWorth =
                     portfolio.balance + portfolio.holdings * price;
                   return { address, portfolio, netWorth };
