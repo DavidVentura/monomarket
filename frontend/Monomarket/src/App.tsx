@@ -7,11 +7,13 @@ import type {
   InitialState,
   LogEntry,
   NeedsToRegister,
+  PricePoint,
   ServerMessage,
   State,
   TradableState,
   WaitingServerParams,
 } from "./types";
+import { PriceChart } from "./PriceChart";
 import "./App.css";
 
 const WS_URL = "ws://localhost:8090";
@@ -155,9 +157,21 @@ function App() {
               };
             }
             if (prev.name === "TradableState") {
+              const newPricePoint: PricePoint = {
+                blockNumber: data.block_number,
+                price: data.new_price,
+                timestamp: new Date(),
+              };
+              const updatedHistory = [...prev.state.priceHistory, newPricePoint];
+              const limitedHistory = updatedHistory.slice(-200);
+
               return {
                 name: prev.name,
-                state: { ...prev.state, currentPrice: data.new_price },
+                state: {
+                  ...prev.state,
+                  currentPrice: data.new_price,
+                  priceHistory: limitedHistory,
+                },
               };
             }
             return prev;
@@ -243,12 +257,18 @@ function App() {
             }
             if (prev.name === "AwaitingRegistration") {
               addLog("Registration confirmed!", "info");
+              const initialPricePoint: PricePoint = {
+                blockNumber: data.block_number,
+                price: prev.state.currentPrice,
+                timestamp: new Date(),
+              };
               return {
                 name: "TradableState",
                 state: {
                   ...prev.state,
                   balance: data.balance,
                   holdings: data.holdings,
+                  priceHistory: [initialPricePoint],
                 },
               } satisfies TradableState;
             }
@@ -351,6 +371,11 @@ function App() {
 
     if (isAlreadyRegistered) {
       addLog("Already registered, moving to trading", "info");
+      const initialPricePoint: PricePoint = {
+        blockNumber: 0,
+        price: currentPrice,
+        timestamp: new Date(),
+      };
       setState({
         name: "TradableState",
         state: {
@@ -363,6 +388,7 @@ function App() {
           currentPrice,
           balance: balance!,
           holdings: holdings!,
+          priceHistory: [initialPricePoint],
         },
       } satisfies TradableState);
       return;
@@ -572,30 +598,38 @@ function App() {
       )}
 
       {state.name === "TradableState" && (
-        <div className="trading-section">
-          <button
-            onClick={() => sendTx({ txType: "buy", amount: 1 })}
-            disabled={
-              state.state.funds <
-                state.state.gasCosts.buy * Number(GAS_PRICE) ||
-              state.state.currentPrice > state.state.balance
-            }
-            className="trade-btn buy-btn"
-          >
-            Buy 1
-          </button>
-          <button
-            onClick={() => sendTx({ txType: "sell", amount: 1 })}
-            disabled={
-              state.state.funds <
-                state.state.gasCosts.sell * Number(GAS_PRICE) ||
-              state.state.holdings < 1
-            }
-            className="trade-btn sell-btn"
-          >
-            Sell 1
-          </button>
-        </div>
+        <>
+          {state.state.priceHistory.length >= 2 && (
+            <div className="chart-section">
+              <h2>Price Chart</h2>
+              <PriceChart priceHistory={state.state.priceHistory} />
+            </div>
+          )}
+          <div className="trading-section">
+            <button
+              onClick={() => sendTx({ txType: "buy", amount: 1 })}
+              disabled={
+                state.state.funds <
+                  state.state.gasCosts.buy * Number(GAS_PRICE) ||
+                state.state.currentPrice > state.state.balance
+              }
+              className="trade-btn buy-btn"
+            >
+              Buy 1
+            </button>
+            <button
+              onClick={() => sendTx({ txType: "sell", amount: 1 })}
+              disabled={
+                state.state.funds <
+                  state.state.gasCosts.sell * Number(GAS_PRICE) ||
+                state.state.holdings < 1
+              }
+              className="trade-btn sell-btn"
+            >
+              Sell 1
+            </button>
+          </div>
+        </>
       )}
 
       {state.name !== "InitialState" && currentPortfolio.size > 0 && (

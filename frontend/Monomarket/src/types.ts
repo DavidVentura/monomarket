@@ -92,6 +92,12 @@ export type AwaitingRegistration = {
   };
 };
 
+export interface PricePoint {
+  blockNumber: number;
+  price: number;
+  timestamp: Date;
+}
+
 export type TradableState = {
   name: "TradableState";
   state: {
@@ -104,6 +110,7 @@ export type TradableState = {
     currentPrice: number;
     balance: number;
     holdings: number;
+    priceHistory: PricePoint[];
   };
 };
 
