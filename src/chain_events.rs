@@ -23,59 +23,54 @@ pub async fn process_chain_events(
         match log.topic0() {
             Some(&StockMarket::PriceUpdate::SIGNATURE_HASH) => {
                 let event = StockMarket::PriceUpdate::decode_log(&log.inner, true)?;
+                let new_price: u64 = event.newPrice.to();
+                let block_number: u64 = event.blockNumber.to();
+
+                tracing::info!("📈 Price update: {} (block {})", new_price, block_number);
+
                 let mut state_guard = state.write().await;
-                state_guard.current_price = event.newPrice.to();
+                state_guard.current_price = new_price;
 
                 let msg = ServerMessage::PriceUpdate {
-                    old_price: event.oldPrice.to(),
-                    new_price: event.newPrice.to(),
-                    block_number: event.blockNumber.to(),
+                    new_price,
+                    block_number,
                 };
                 let _ = broadcast_tx.send(msg);
             }
-            Some(&StockMarket::Bought::SIGNATURE_HASH) => {
-                let event = StockMarket::Bought::decode_log(&log.inner, true)?;
+            Some(&StockMarket::Position::SIGNATURE_HASH) => {
+                let event = StockMarket::Position::decode_log(&log.inner, true)?;
                 let user_addr = event.user;
-                let amount: u64 = event.amount.to();
+                let balance: u64 = event.balance.to();
+                let holdings: u64 = event.holdings.to();
+                let block_number: u64 = event.blockNumber.to();
+
+                tracing::info!("💼 Position update: {:?} | balance: {}, holdings: {} (block {})",
+                    user_addr, balance, holdings, block_number);
 
                 let mut state_guard = state.write().await;
-                state_guard
-                    .balances
-                    .insert(user_addr, event.newBalance.to());
-                state_guard
-                    .holdings
-                    .insert(user_addr, event.newHoldings.to());
-                let name = state_guard.names.get(&user_addr).cloned();
+                state_guard.balances.insert(user_addr, balance);
+                state_guard.holdings.insert(user_addr, holdings);
+                state_guard.last_position_block = block_number;
 
-                let msg = ServerMessage::Bought {
-                    user: format!("{:?}", user_addr),
-                    name,
-                    amount,
-                    balance: event.newBalance.to(),
-                    holdings: event.newHoldings.to(),
+                let msg = ServerMessage::Position {
+                    address: format!("{:?}", user_addr),
+                    balance,
+                    holdings,
+                    block_number,
                 };
                 let _ = broadcast_tx.send(msg);
             }
-            Some(&StockMarket::Sold::SIGNATURE_HASH) => {
-                let event = StockMarket::Sold::decode_log(&log.inner, true)?;
+            Some(&StockMarket::NewUser::SIGNATURE_HASH) => {
+                let event = StockMarket::NewUser::decode_log(&log.inner, true)?;
                 let user_addr = event.user;
-                let amount: u64 = event.amount.to();
 
-                let mut state_guard = state.write().await;
-                state_guard
-                    .balances
-                    .insert(user_addr, event.newBalance.to());
-                state_guard
-                    .holdings
-                    .insert(user_addr, event.newHoldings.to());
-                let name = state_guard.names.get(&user_addr).cloned();
+                tracing::info!("👤 New user registered: {:?}", user_addr);
 
-                let msg = ServerMessage::Sold {
-                    user: format!("{:?}", user_addr),
-                    name,
-                    amount,
-                    balance: event.newBalance.to(),
-                    holdings: event.newHoldings.to(),
+                let msg = ServerMessage::Position {
+                    address: format!("{:?}", user_addr),
+                    balance: 1000,
+                    holdings: 0,
+                    block_number: 0,
                 };
                 let _ = broadcast_tx.send(msg);
             }

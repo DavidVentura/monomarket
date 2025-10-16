@@ -13,32 +13,17 @@ export type ServerMessage =
   | { type: "nonce_response"; address: string; nonce: number }
   | {
       type: "price_update";
-      old_price: number;
       new_price: number;
       block_number: number;
     }
-  | {
-      type: "bought";
-      user: string;
-      name?: string;
-      amount: number;
-      balance: number;
-      holdings: number;
-    }
-  | {
-      type: "sold";
-      user: string;
-      name?: string;
-      amount: number;
-      balance: number;
-      holdings: number;
-    }
+  | { type: "current_price"; price: number }
   | { type: "name_set"; address: string; name: string }
   | {
       type: "position";
       address: string;
       balance: number;
       holdings: number;
+      block_number: number;
     }
   | { type: "tx_error"; error: string }
   | { type: "tx_submitted"; tx_hash: string };
@@ -74,6 +59,7 @@ export type WaitingServerParams = {
     nonce?: number;
     balance?: number;
     holdings?: number;
+    currentPrice?: number;
   };
 };
 
@@ -85,8 +71,9 @@ export type NeedsToRegister = {
     contract: ethers.Contract;
     gasCosts: GasInfo;
     nonce: number;
-    balance: number;
-    holdings: number;
+    balance?: number;
+    holdings?: number;
+    currentPrice: number;
   };
 };
 
@@ -99,6 +86,9 @@ export type AwaitingRegistration = {
     gasCosts: GasInfo;
     nonce: number;
     name: string;
+    balance?: number;
+    holdings?: number;
+    currentPrice: number;
   };
 };
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ethers } from "ethers";
+import classNames from "classnames";
 import type {
   AwaitingRegistration,
   ClientMessage,
@@ -23,6 +24,11 @@ const CONTRACT_ABI = [
   "function sell(uint256 amount) external",
 ];
 
+interface Portfolio {
+  balance: number;
+  holdings: number;
+}
+
 function App() {
   const [state, setState] = useState<State>({
     name: "InitialState",
@@ -31,6 +37,10 @@ function App() {
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [nameInput, setNameInput] = useState<string>("");
+  const [currentPortfolio, setCurrentPortfolio] = useState<
+    Map<string, Portfolio>
+  >(new Map());
+  const [names, setNames] = useState<Map<string, string>>(new Map());
 
   const wsRef = useRef<WebSocket | null>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
@@ -128,10 +138,22 @@ function App() {
 
         case "price_update": {
           addLog(
-            `Price: ${data.old_price} → ${data.new_price} (block ${data.block_number})`,
+            `Price: ${data.new_price} (block ${data.block_number})`,
             "price"
           );
           setState((prev) => {
+            if (prev.name === "WaitingServerParams") {
+              return {
+                name: prev.name,
+                state: { ...prev.state, currentPrice: data.new_price },
+              };
+            }
+            if (prev.name === "NeedsToRegister") {
+              return {
+                name: prev.name,
+                state: { ...prev.state, currentPrice: data.new_price },
+              };
+            }
             if (prev.name === "TradableState") {
               return {
                 name: prev.name,
@@ -143,53 +165,25 @@ function App() {
           break;
         }
 
-        case "bought": {
-          addLog(
-            `${data.name || data.user} bought ${data.amount} | Balance: ${
-              data.balance
-            }, Holdings: ${data.holdings}`,
-            "bought"
-          );
+        case "current_price": {
+          addLog(`Current price: ${data.price}`, "price");
           setState((prev) => {
-            if (
-              prev.name === "TradableState" &&
-              data.user.toLowerCase() ===
-                prev.state.wallet.address.toLowerCase()
-            ) {
+            if (prev.name === "WaitingServerParams") {
               return {
                 name: prev.name,
-                state: {
-                  ...prev.state,
-                  balance: data.balance,
-                  holdings: data.holdings,
-                },
+                state: { ...prev.state, currentPrice: data.price },
               };
             }
-            return prev;
-          });
-          break;
-        }
-
-        case "sold": {
-          addLog(
-            `${data.name || data.user} sold ${data.amount} | Balance: ${
-              data.balance
-            }, Holdings: ${data.holdings}`,
-            "sold"
-          );
-          setState((prev) => {
-            if (
-              prev.name === "TradableState" &&
-              data.user.toLowerCase() ===
-                prev.state.wallet.address.toLowerCase()
-            ) {
+            if (prev.name === "NeedsToRegister") {
               return {
                 name: prev.name,
-                state: {
-                  ...prev.state,
-                  balance: data.balance,
-                  holdings: data.holdings,
-                },
+                state: { ...prev.state, currentPrice: data.price },
+              };
+            }
+            if (prev.name === "TradableState") {
+              return {
+                name: prev.name,
+                state: { ...prev.state, currentPrice: data.price },
               };
             }
             return prev;
@@ -199,6 +193,9 @@ function App() {
 
         case "name_set": {
           addLog(`${data.address} → ${data.name}`, "name");
+          setNames((prev) =>
+            new Map(prev).set(data.address.toLowerCase(), data.name)
+          );
           break;
         }
 
@@ -207,6 +204,14 @@ function App() {
             `${data.address} | Cash: ${data.balance}, Holdings: ${data.holdings}`,
             "info"
           );
+
+          setCurrentPortfolio((prev) =>
+            new Map(prev).set(data.address.toLowerCase(), {
+              balance: data.balance,
+              holdings: data.holdings,
+            })
+          );
+
           setState((prev) => {
             const isOurAddress =
               data.address.toLowerCase() ===
@@ -225,6 +230,17 @@ function App() {
                   holdings: data.holdings,
                 },
               };
+            }
+            if (prev.name === "AwaitingRegistration") {
+              addLog("Registration confirmed!", "info");
+              return {
+                name: "TradableState",
+                state: {
+                  ...prev.state,
+                  balance: data.balance,
+                  holdings: data.holdings,
+                },
+              } satisfies TradableState;
             }
             if (prev.name === "TradableState") {
               return {
@@ -273,8 +289,7 @@ function App() {
       state.state.funds &&
       state.state.gasCosts &&
       state.state.nonce !== undefined &&
-      state.state.balance !== undefined &&
-      state.state.holdings !== undefined
+      state.state.currentPrice !== undefined
     ) {
       console.log("Moving to NeedsToRegister");
       setState({
@@ -284,8 +299,7 @@ function App() {
           contract: state.state.contract,
           gasCosts: state.state.gasCosts,
           nonce: state.state.nonce,
-          balance: state.state.balance,
-          holdings: state.state.holdings,
+          currentPrice: state.state.currentPrice,
         },
         name: "NeedsToRegister",
       } satisfies NeedsToRegister);
@@ -308,8 +322,20 @@ function App() {
       address: state.state.wallet.address,
     });
 
-    const { wallet, funds, contract, gasCosts, nonce, balance, holdings } = state.state;
-    const isAlreadyRegistered = balance > 0 || holdings > 0;
+    const {
+      wallet,
+      funds,
+      contract,
+      gasCosts,
+      nonce,
+      balance,
+      holdings,
+      currentPrice,
+    } = state.state;
+    const isAlreadyRegistered =
+      balance !== undefined &&
+      holdings !== undefined &&
+      (balance > 0 || holdings > 0);
 
     if (isAlreadyRegistered) {
       addLog("Already registered, moving to trading", "info");
@@ -322,9 +348,9 @@ function App() {
           gasCosts,
           nonce,
           name,
-          currentPrice: 50,
-          balance,
-          holdings,
+          currentPrice,
+          balance: balance!,
+          holdings: holdings!,
         },
       } satisfies TradableState);
       return;
@@ -356,37 +382,15 @@ function App() {
           gasCosts,
           nonce: nonce + 1,
           name,
+          balance,
+          holdings,
+          currentPrice,
         },
       } satisfies AwaitingRegistration);
     } catch (e) {
       addLog(`Failed to send register transaction: ${e}`, "error");
     }
   };
-
-  useEffect(() => {
-    if (state.name === "AwaitingRegistration") {
-      addLog("Registration pending...", "info");
-
-      // TODO: Listen for tx confirmation from contract events
-      // For now, assume registration succeeds immediately
-      setTimeout(() => {
-        addLog(
-          "Registration assumed successful (TODO: verify on-chain)",
-          "info"
-        );
-
-        setState({
-          name: "TradableState",
-          state: {
-            ...state.state,
-            currentPrice: 50,
-            balance: 1000,
-            holdings: 0,
-          },
-        } satisfies TradableState);
-      }, 1000);
-    }
-  }, [state]);
 
   type RawTx =
     | { txType: "buy" | "sell"; amount: number }
@@ -485,8 +489,50 @@ function App() {
       </div>
 
       {state.name === "WaitingServerParams" && (
-        <div className="name-section">
-          <p>Waiting for server parameters...</p>
+        <div className="loading-section">
+          <div className="loading-spinner">
+            <svg width="80" height="80" viewBox="0 0 80 80">
+              <circle
+                cx="40"
+                cy="40"
+                r="32"
+                fill="none"
+                stroke="#569cd6"
+                strokeWidth="4"
+                strokeLinecap="round"
+                strokeDasharray="150 50"
+              >
+                <animateTransform
+                  attributeName="transform"
+                  type="rotate"
+                  from="0 40 40"
+                  to="360 40 40"
+                  dur="1.5s"
+                  repeatCount="indefinite"
+                />
+              </circle>
+              <circle
+                cx="40"
+                cy="40"
+                r="24"
+                fill="none"
+                stroke="#4ec9b0"
+                strokeWidth="3"
+                strokeLinecap="round"
+                strokeDasharray="100 50"
+              >
+                <animateTransform
+                  attributeName="transform"
+                  type="rotate"
+                  from="360 40 40"
+                  to="0 40 40"
+                  dur="2s"
+                  repeatCount="indefinite"
+                />
+              </circle>
+            </svg>
+          </div>
+          <p className="loading-text">Funding your wallet...</p>
         </div>
       )}
 
@@ -518,7 +564,9 @@ function App() {
           <button
             onClick={() => sendTx({ txType: "buy", amount: 1 })}
             disabled={
-              state.state.funds < state.state.gasCosts.buy * Number(GAS_PRICE)
+              state.state.funds <
+                state.state.gasCosts.buy * Number(GAS_PRICE) ||
+              state.state.currentPrice > state.state.balance
             }
             className="trade-btn buy-btn"
           >
@@ -535,6 +583,47 @@ function App() {
           >
             Sell 1
           </button>
+        </div>
+      )}
+
+      {state.name !== "InitialState" && currentPortfolio.size > 0 && (
+        <div className="portfolio-section">
+          <h2>All Players</h2>
+          <table className="portfolio-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Balance</th>
+                <th>Holdings</th>
+                <th>Net Worth</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Array.from(currentPortfolio.entries())
+                .map(([address, portfolio]) => {
+                  const price = state.state.currentPrice || 50;
+                  const netWorth =
+                    portfolio.balance + portfolio.holdings * price;
+                  return { address, portfolio, netWorth };
+                })
+                .sort((a, b) => b.netWorth - a.netWorth)
+                .map(({ address, portfolio, netWorth }) => {
+                  const isUser =
+                    state.state.wallet.address.toLowerCase() === address;
+                  return (
+                    <tr
+                      key={address}
+                      className={classNames({ "user-row": isUser })}
+                    >
+                      <td>{names.get(address) || "Unknown"}</td>
+                      <td>{portfolio.balance}</td>
+                      <td>{portfolio.holdings}</td>
+                      <td>{netWorth}</td>
+                    </tr>
+                  );
+                })}
+            </tbody>
+          </table>
         </div>
       )}
 

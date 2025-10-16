@@ -2,8 +2,6 @@
 src = "contract/src/"
 out = "contract/out"
 libs = ["contract/lib"]
-metadata = true
-metadata_hash = "none"  # disable ipfs
 use_literal_content = true # use source code
 
 # Monad Configuration

@@ -1,5 +1,5 @@
-use crate::BackendTxEvent;
 use crate::ws::ServerMessage;
+use crate::{AppState, BackendTxEvent};
 use alloy::{
     network::TransactionBuilder,
     primitives::{Address, U256},
@@ -8,7 +8,8 @@ use alloy::{
     transports::Transport,
 };
 use anyhow::Result;
-use tokio::sync::{broadcast, mpsc};
+use std::sync::Arc;
+use tokio::sync::{RwLock, broadcast, mpsc};
 
 mod contract {
     use alloy::sol;
@@ -28,6 +29,7 @@ async fn handle_fund_event<'a, T, P>(
     addr: Address,
     broadcast_tx: &broadcast::Sender<ServerMessage>,
     client_tx: &mpsc::Sender<ServerMessage>,
+    state: Arc<RwLock<AppState>>,
 ) -> Result<()>
 where
     T: Transport + Clone,
@@ -37,7 +39,9 @@ where
     tracing::info!("Balance for {:?}: {} wei", addr, balance);
 
     if balance > U256::ZERO {
-        tracing::info!("Address already funded, reading holdings and sending Funded and Position events");
+        tracing::info!(
+            "Address already funded, reading holdings and sending Funded and Position events"
+        );
         let holdings = contract.getHoldings(addr).call().await?;
         let contract_balance = contract.getBalance(addr).call().await?;
 
@@ -47,18 +51,30 @@ where
         };
         let _ = client_tx.send(funded_msg).await;
 
-        let position_msg = ServerMessage::Position {
-            address: format!("{:?}", addr),
-            balance: contract_balance._0.to::<u64>(),
-            holdings: holdings._0.to::<u64>(),
-        };
-        let _ = broadcast_tx.send(position_msg);
+        let balance = contract_balance._0.to::<u64>();
+        let holdings = holdings._0.to::<u64>();
+        if balance > 0 && holdings > 0 {
+            let position_msg = ServerMessage::Position {
+                address: format!("{:?}", addr),
+                balance,
+                holdings,
+                block_number: 0,
+            };
+            let _ = broadcast_tx.send(position_msg);
+        }
         return Ok(());
     }
 
     tracing::info!("Balance is zero, funding account...");
     let funding_amount = U256::from(500_000_000_000_000_000u64);
     tracing::info!("Funding {:?} with {} wei (0.5 MON)", addr, funding_amount);
+
+    let nonce = {
+        let mut state_guard = state.write().await;
+        let nonce = state_guard.backend_nonce;
+        state_guard.backend_nonce += 1;
+        nonce
+    };
 
     let gas_price = U256::from(0x21d664903cu64);
     let gas_limit = 25_000u64; // experimentally obtained 25k gas
@@ -70,12 +86,13 @@ where
     let tx = TransactionRequest::default()
         .to(addr)
         .value(funding_amount)
+        .with_nonce(nonce)
         .with_gas_limit(gas_limit)
         .with_gas_price(gas_price.to::<u128>());
 
     let pending = provider.send_transaction(tx).await?;
     let tx_hash = *pending.tx_hash();
-    tracing::info!("📤 Funding tx sent: {:?}", tx_hash);
+    tracing::info!("📤 Funding tx sent: {:?} (nonce: {})", tx_hash, nonce);
 
     let receipt = pending.get_receipt().await?;
     tracing::info!(
@@ -90,21 +107,11 @@ where
     );
 
     if receipt.status() {
-        let holdings = contract.getHoldings(addr).call().await?;
-        let contract_balance = contract.getBalance(addr).call().await?;
-
         let funded_msg = ServerMessage::Funded {
             address: format!("{:?}", addr),
             amount: funding_amount.to::<u64>(),
         };
         let _ = client_tx.send(funded_msg).await;
-
-        let position_msg = ServerMessage::Position {
-            address: format!("{:?}", addr),
-            balance: contract_balance._0.to::<u64>(),
-            holdings: holdings._0.to::<u64>(),
-        };
-        let _ = broadcast_tx.send(position_msg);
     } else {
         let error_msg = format!("Funding transaction failed: {:?}", tx_hash);
         tracing::error!("{}", error_msg);
@@ -119,15 +126,34 @@ where
 }
 
 async fn handle_tick_event<T, P>(
-    contract: &StockMarket::StockMarketInstance<T, P>,
+    provider: &P,
+    contract: &StockMarket::StockMarketInstance<T, &P>,
+    state: Arc<RwLock<AppState>>,
 ) -> Result<()>
 where
     T: Transport + Clone,
-    P: Provider<T>,
+    P: Provider<T> + WalletProvider,
 {
-    let pending = contract.tick().send().await?;
+    let nonce = {
+        let mut state_guard = state.write().await;
+        let nonce = state_guard.backend_nonce;
+        state_guard.backend_nonce += 1;
+        nonce
+    };
+
+    let gas_price = U256::from(0x21d664903cu64);
+    let gas_limit = 40_000u64;
+
+    let call = contract.tick();
+    let tx_req = call
+        .into_transaction_request()
+        .with_nonce(nonce)
+        .with_gas_limit(gas_limit)
+        .with_gas_price(gas_price.to::<u128>());
+
+    let pending = provider.send_transaction(tx_req).await?;
     let tx_hash = *pending.tx_hash();
-    tracing::info!("📤 Tick tx sent: {:?}", tx_hash);
+    tracing::info!("📤 Tick tx sent: {:?} (nonce: {})", tx_hash, nonce);
 
     let receipt = pending.get_receipt().await?;
     tracing::info!(
@@ -154,6 +180,7 @@ pub async fn backend_tx_executor<T, P>(
     provider: P,
     contract_addr: Address,
     broadcast_tx: broadcast::Sender<ServerMessage>,
+    state: Arc<RwLock<AppState>>,
 ) -> Result<()>
 where
     T: Transport + Clone,
@@ -167,7 +194,16 @@ where
         match event {
             BackendTxEvent::Fund(addr, client_tx) => {
                 tracing::info!("Processing Fund event for {:?}", addr);
-                if let Err(e) = handle_fund_event(&provider, &contract, addr, &broadcast_tx, &client_tx).await {
+                if let Err(e) = handle_fund_event(
+                    &provider,
+                    &contract,
+                    addr,
+                    &broadcast_tx,
+                    &client_tx,
+                    state.clone(),
+                )
+                .await
+                {
                     let error_msg = format!("Failed to fund account: {}", e);
                     tracing::error!("{}", error_msg);
                     let msg = ServerMessage::FundError {
@@ -179,7 +215,7 @@ where
             }
             BackendTxEvent::Tick => {
                 tracing::info!("Processing Tick event");
-                if let Err(e) = handle_tick_event(&contract).await {
+                if let Err(e) = handle_tick_event(&provider, &contract, state.clone()).await {
                     let error_msg = format!("Failed to process tick: {}", e);
                     tracing::error!("{}", error_msg);
                 }
@@ -189,4 +225,3 @@ where
 
     Ok(())
 }
-

@@ -18,9 +18,8 @@ contract StockMarket {
     mapping(address => UserData) public userData;
     address[] public activeAddresses;
 
-    event PriceUpdate(uint256 oldPrice, uint256 newPrice, uint256 blockNumber);
-    event Bought(address indexed user, uint256 amount, uint256 newBalance, uint256 newHoldings);
-    event Sold(address indexed user, uint256 amount, uint256 newBalance, uint256 newHoldings);
+    event PriceUpdate(uint256 newPrice, uint256 blockNumber);
+    event Position(address indexed user, uint256 balance, uint256 holdings, uint256 blockNumber);
     event NewUser(address indexed user);
 
     modifier initializeUser() {
@@ -66,7 +65,6 @@ contract StockMarket {
         // forge-lint: disable-next-line(unsafe-typecast)
         int256 changePercent = int256(randomSeed % 21) - 10;
 
-        uint256 oldPrice = price;
         // forge-lint: disable-next-line(unsafe-typecast)
         int256 newPriceInt = int256(price) + (int256(price) * changePercent) / 100;
 
@@ -83,7 +81,7 @@ contract StockMarket {
 
         // forge-lint: disable-next-line(unsafe-typecast)
         price = uint256(newPriceInt);
-        emit PriceUpdate(oldPrice, price, block.number);
+        emit PriceUpdate(price, block.number);
     }
 
     function buy(uint256 amount) external {
@@ -102,7 +100,7 @@ contract StockMarket {
             user.holdings += uint128(amount);
         }
 
-        emit Bought(msg.sender, amount, user.balance, user.holdings);
+        emit Position(msg.sender, user.balance, user.holdings, block.number);
     }
 
     function sell(uint256 amount) external {
@@ -121,7 +119,7 @@ contract StockMarket {
             user.balance += uint128(revenue);
         }
 
-        emit Sold(msg.sender, amount, user.balance, user.holdings);
+        emit Position(msg.sender, user.balance, user.holdings, block.number);
     }
 
     function getBalance(address user) external view returns (uint256) {

@@ -35,6 +35,8 @@ pub struct AppState {
     pub current_price: u64,
     pub balances: HashMap<Address, u64>,
     pub holdings: HashMap<Address, u64>,
+    pub backend_nonce: u64,
+    pub last_position_block: u64,
 }
 
 impl AppState {
@@ -45,6 +47,8 @@ impl AppState {
             current_price: 50,
             balances: HashMap::new(),
             holdings: HashMap::new(),
+            backend_nonce: 0,
+            last_position_block: 0,
         }
     }
 }
@@ -105,17 +109,28 @@ async fn main() -> Result<()> {
     let gas_costs = Arc::new(gas_costs);
 
     let state = Arc::new(RwLock::new(AppState::new()));
+
+    let backend_address = provider_write.default_signer_address();
+    let backend_nonce = provider_write.get_transaction_count(backend_address).await?;
+    tracing::info!("Backend wallet {:?} starting nonce: {}", backend_address, backend_nonce);
+    {
+        let mut state_guard = state.write().await;
+        state_guard.backend_nonce = backend_nonce;
+    }
+
     let (broadcast_tx, _) = broadcast::channel::<ServerMessage>(1000);
     let (backend_tx_sender, backend_tx_receiver) = mpsc::channel::<BackendTxEvent>(100);
 
     let provider_write_clone = provider_write.clone();
     let broadcast_tx_clone = broadcast_tx.clone();
+    let state_clone_backend = state.clone();
     tokio::spawn(async move {
         if let Err(e) = backend::backend_tx_executor(
             backend_tx_receiver,
             provider_write_clone,
             contract_addr,
             broadcast_tx_clone,
+            state_clone_backend,
         )
         .await
         {
@@ -149,13 +164,33 @@ async fn main() -> Result<()> {
     let block_sub = provider_read.subscribe_blocks().await?;
     let mut block_stream = block_sub.into_stream();
 
+    let state_clone_blocks = state.clone();
+    let backend_tx_sender_clone_blocks = backend_tx_sender.clone();
     tokio::spawn(async move {
         while let Some(block) = block_stream.next().await {
+            let block_number = block.number;
             tracing::info!(
                 "🧱 New Block: {} (timestamp: {})",
-                block.number,
+                block_number,
                 block.timestamp
             );
+
+            let should_tick = {
+                let state_guard = state_clone_blocks.read().await;
+                let last_position_block = state_guard.last_position_block;
+
+                if last_position_block == 0 {
+                    false
+                } else {
+                    let blocks_since_position = block_number.saturating_sub(last_position_block);
+                    blocks_since_position <= 30
+                }
+            };
+
+            if should_tick {
+                tracing::info!("⏰ Auto-tick triggered on block {}", block_number);
+                let _ = backend_tx_sender_clone_blocks.send(BackendTxEvent::Tick).await;
+            }
         }
     });
 

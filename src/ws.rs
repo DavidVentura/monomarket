@@ -30,25 +30,11 @@ pub enum ServerMessage {
         gas_costs: GasInfo,
     },
     PriceUpdate {
-        old_price: u64,
         new_price: u64,
         block_number: u64,
     },
-    Bought {
-        user: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        name: Option<String>,
-        amount: u64,
-        balance: u64,
-        holdings: u64,
-    },
-    Sold {
-        user: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        name: Option<String>,
-        amount: u64,
-        balance: u64,
-        holdings: u64,
+    CurrentPrice {
+        price: u64,
     },
     NameSet {
         address: String,
@@ -58,6 +44,7 @@ pub enum ServerMessage {
         address: String,
         balance: u64,
         holdings: u64,
+        block_number: u64,
     },
     TxError {
         error: String,
@@ -124,6 +111,13 @@ where
         tracing::info!("Sent connection info to client");
 
         let state_guard = state.read().await;
+
+        let current_price_msg = ServerMessage::CurrentPrice {
+            price: state_guard.current_price,
+        };
+        let json = serde_json::to_string(&current_price_msg)?;
+        ws_sender.send(Message::Text(json)).await?;
+        tracing::info!("Sent current price {} to client", state_guard.current_price);
         let name_count = state_guard.names.len();
         if name_count > 0 {
             tracing::info!(
@@ -150,6 +144,7 @@ where
                 address: format!("{:?}", address),
                 balance: *balance,
                 holdings,
+                block_number: 0,
             };
             let json = serde_json::to_string(&msg)?;
             ws_sender.send(Message::Text(json)).await?;
