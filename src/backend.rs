@@ -150,7 +150,7 @@ where
 
     let max_fee_per_gas = U256::from(0x21d664903cu64);
     let max_priority_fee = U256::from(1_000_000_000u64);
-    let gas_limit = 50_000u64;
+    let gas_limit = 60_000u64;
 
     let call = contract.tick();
     let tx_req = call

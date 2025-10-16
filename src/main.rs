@@ -37,6 +37,9 @@ pub struct AppState {
     pub holdings: HashMap<Address, u64>,
     pub backend_nonce: u64,
     pub last_position_block: u64,
+    pub game_start_block: Option<u64>,
+    pub game_end_block: Option<u64>,
+    pub current_block_height: u64,
 }
 
 impl AppState {
@@ -49,6 +52,9 @@ impl AppState {
             holdings: HashMap::new(),
             backend_nonce: 0,
             last_position_block: 0,
+            game_start_block: None,
+            game_end_block: None,
+            current_block_height: 0,
         }
     }
 }
@@ -92,8 +98,8 @@ async fn main() -> Result<()> {
 
     let register_gas = 115_000;
     tracing::info!("Register costs...");
-    let buy_gas = 35_529;
-    let sell_gas = 35_529;
+    let buy_gas = 39733;
+    let sell_gas = 39733;
 
     let gas_costs = GasCosts {
         register: register_gas,
@@ -110,9 +116,29 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(RwLock::new(AppState::new()));
 
+    tracing::info!("Querying contract for game state...");
+    let contract = backend::StockMarket::new(contract_addr, &provider_write);
+    let start_block = contract.startBlock().call().await?._0;
+    let end_block = contract.endBlock().call().await?._0;
+
+    if start_block > 0 {
+        tracing::info!("Game state: started at block {}, ends at block {}", start_block, end_block);
+        let mut state_guard = state.write().await;
+        state_guard.game_start_block = Some(start_block.to());
+        state_guard.game_end_block = Some(end_block.to());
+    } else {
+        tracing::info!("Game not started yet");
+    }
+
     let backend_address = provider_write.default_signer_address();
-    let backend_nonce = provider_write.get_transaction_count(backend_address).await?;
-    tracing::info!("Backend wallet {:?} starting nonce: {}", backend_address, backend_nonce);
+    let backend_nonce = provider_write
+        .get_transaction_count(backend_address)
+        .await?;
+    tracing::info!(
+        "Backend wallet {:?} starting nonce: {}",
+        backend_address,
+        backend_nonce
+    );
     {
         let mut state_guard = state.write().await;
         state_guard.backend_nonce = backend_nonce;
@@ -175,6 +201,11 @@ async fn main() -> Result<()> {
                 block.timestamp
             );
 
+            {
+                let mut state_guard = state_clone_blocks.write().await;
+                state_guard.current_block_height = block_number;
+            }
+
             let should_tick = {
                 let state_guard = state_clone_blocks.read().await;
                 let last_position_block = state_guard.last_position_block;
@@ -189,7 +220,9 @@ async fn main() -> Result<()> {
 
             if should_tick {
                 tracing::info!("⏰ Auto-tick triggered on block {}", block_number);
-                let _ = backend_tx_sender_clone_blocks.send(BackendTxEvent::Tick).await;
+                let _ = backend_tx_sender_clone_blocks
+                    .send(BackendTxEvent::Tick)
+                    .await;
             }
         }
     });

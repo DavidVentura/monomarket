@@ -4,6 +4,7 @@ import classNames from "classnames";
 import type {
   AwaitingRegistration,
   ClientMessage,
+  GameEnded,
   InitialState,
   LogEntry,
   NeedsToRegister,
@@ -11,12 +12,15 @@ import type {
   ServerMessage,
   State,
   TradableState,
+  WaitingForGameStart,
   WaitingServerParams,
 } from "./types";
 import { PriceChart } from "./PriceChart";
+import { GasBar } from "./GasBar";
+import { FloatingMessage } from "./FloatingMessage";
 import "./App.css";
 
-const WS_URL = "ws://localhost:8090";
+const WS_URL = "ws://worklaptop.labs:8090";
 const CHAIN_ID = 30143n;
 const GAS_PRICE = 0x21d664903cn;
 
@@ -43,10 +47,16 @@ function App() {
     Map<string, Portfolio>
   >(new Map());
   const [names, setNames] = useState<Map<string, string>>(new Map());
+  const [floatingMessages, setFloatingMessages] = useState<
+    Array<{ id: number; x: number; y: number; message: string }>
+  >([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const consoleRef = useRef<HTMLDivElement>(null);
   const prevHoldingsRef = useRef<Map<string, number>>(new Map());
+  const messageIdRef = useRef(0);
+  const namesRef = useRef<Map<string, string>>(new Map());
 
   const addLog = (message: string, logType: LogEntry["logType"] = "info") => {
     setLogs((prev) => [...prev, { timestamp: new Date(), message, logType }]);
@@ -143,13 +153,31 @@ function App() {
             if (prev.name === "WaitingServerParams") {
               return {
                 name: prev.name,
-                state: { ...prev.state, currentPrice: data.new_price },
+                state: {
+                  ...prev.state,
+                  currentPrice: data.new_price,
+                  currentBlockHeight: data.block_number,
+                },
               };
             }
             if (prev.name === "NeedsToRegister") {
               return {
                 name: prev.name,
-                state: { ...prev.state, currentPrice: data.new_price },
+                state: {
+                  ...prev.state,
+                  currentPrice: data.new_price,
+                  currentBlockHeight: data.block_number,
+                },
+              };
+            }
+            if (prev.name === "WaitingForGameStart") {
+              return {
+                name: prev.name,
+                state: {
+                  ...prev.state,
+                  currentPrice: data.new_price,
+                  currentBlockHeight: data.block_number,
+                },
               };
             }
             if (prev.name === "TradableState") {
@@ -169,6 +197,7 @@ function App() {
                 state: {
                   ...prev.state,
                   currentPrice: data.new_price,
+                  currentBlockHeight: data.block_number,
                   priceHistory: limitedHistory,
                 },
               };
@@ -192,6 +221,12 @@ function App() {
                 state: { ...prev.state, currentPrice: data.price },
               };
             }
+            if (prev.name === "WaitingForGameStart") {
+              return {
+                name: prev.name,
+                state: { ...prev.state, currentPrice: data.price },
+              };
+            }
             if (prev.name === "TradableState") {
               return {
                 name: prev.name,
@@ -203,18 +238,51 @@ function App() {
           break;
         }
 
+        case "current_block_height": {
+          setState((prev) => {
+            if (prev.name === "WaitingServerParams") {
+              return {
+                name: prev.name,
+                state: { ...prev.state, currentBlockHeight: data.height },
+              };
+            } else if (prev.name === "NeedsToRegister") {
+              return {
+                name: prev.name,
+                state: { ...prev.state, currentBlockHeight: data.height },
+              };
+            } else if (prev.name === "AwaitingRegistration") {
+              return {
+                name: prev.name,
+                state: { ...prev.state, currentBlockHeight: data.height },
+              };
+            } else if (prev.name === "WaitingForGameStart") {
+              return {
+                name: prev.name,
+                state: { ...prev.state, currentBlockHeight: data.height },
+              };
+            } else if (prev.name === "TradableState") {
+              return {
+                name: prev.name,
+                state: { ...prev.state, currentBlockHeight: data.height },
+              };
+            }
+            return prev;
+          });
+          break;
+        }
+
         case "name_set": {
           addLog(`${data.name} joined`, "info");
-          setNames((prev) =>
-            new Map(prev).set(data.address.toLowerCase(), data.name)
-          );
+          const addressLower = data.address.toLowerCase();
+          namesRef.current.set(addressLower, data.name);
+          setNames((prev) => new Map(prev).set(addressLower, data.name));
           break;
         }
 
         case "position": {
           const addressLower = data.address.toLowerCase();
           const previousHoldings = prevHoldingsRef.current.get(addressLower);
-          const playerName = names.get(addressLower) || "Unknown";
+          const playerName = namesRef.current.get(addressLower) || "Unknown";
 
           if (previousHoldings !== undefined) {
             const holdingsDiff = data.holdings - previousHoldings;
@@ -223,7 +291,9 @@ function App() {
             } else if (holdingsDiff < 0) {
               addLog(`${playerName} sold`, "info");
             }
-            console.log(`Position update for ${playerName}: ${previousHoldings} → ${data.holdings} (diff: ${holdingsDiff})`);
+            console.log(
+              `Position update for ${playerName}: ${previousHoldings} → ${data.holdings} (diff: ${holdingsDiff})`
+            );
           }
 
           prevHoldingsRef.current.set(addressLower, data.holdings);
@@ -266,20 +336,14 @@ function App() {
             }
             if (prev.name === "AwaitingRegistration") {
               addLog("Registration confirmed!", "info");
-              const initialPricePoint: PricePoint = {
-                blockNumber: data.block_number,
-                price: prev.state.currentPrice,
-                timestamp: new Date(),
-              };
               return {
-                name: "TradableState",
+                name: "WaitingForGameStart",
                 state: {
                   ...prev.state,
                   balance: data.balance,
                   holdings: data.holdings,
-                  priceHistory: [initialPricePoint],
                 },
-              } satisfies TradableState;
+              } satisfies WaitingForGameStart;
             }
             if (prev.name === "TradableState") {
               return {
@@ -303,6 +367,77 @@ function App() {
 
         case "tx_submitted": {
           console.log(`TX submitted: ${data.tx_hash}`);
+          break;
+        }
+
+        case "game_started": {
+          console.log(
+            `Game started: blocks ${data.start_height} to ${data.end_height}`
+          );
+          setState((prev) => {
+            if (prev.name === "WaitingServerParams") {
+              return {
+                name: prev.name,
+                state: {
+                  ...prev.state,
+                  startHeight: data.start_height,
+                  endHeight: data.end_height,
+                },
+              };
+            } else if (prev.name === "NeedsToRegister") {
+              return {
+                name: prev.name,
+                state: {
+                  ...prev.state,
+                  startHeight: data.start_height,
+                  endHeight: data.end_height,
+                },
+              };
+            } else if (prev.name === "AwaitingRegistration") {
+              return {
+                name: prev.name,
+                state: {
+                  ...prev.state,
+                  startHeight: data.start_height,
+                  endHeight: data.end_height,
+                },
+              };
+            } else if (prev.name === "WaitingForGameStart") {
+              return {
+                name: prev.name,
+                state: {
+                  ...prev.state,
+                  startHeight: data.start_height,
+                  endHeight: data.end_height,
+                },
+              };
+            } else if (prev.name === "TradableState") {
+              return {
+                name: prev.name,
+                state: {
+                  ...prev.state,
+                  startHeight: data.start_height,
+                  endHeight: data.end_height,
+                },
+              };
+            }
+            return prev;
+          });
+          break;
+        }
+
+        case "game_ended": {
+          console.log("Game ended");
+          addLog("Game ended", "info");
+          setState((prev) => {
+            if (prev.name === "TradableState") {
+              return {
+                name: "GameEnded",
+                state: prev.state,
+              } satisfies GameEnded;
+            }
+            return prev;
+          });
           break;
         }
       }
@@ -332,18 +467,49 @@ function App() {
     ) {
       console.log("Moving to NeedsToRegister");
       setState({
+        name: "NeedsToRegister",
         state: {
-          wallet: state.state.wallet,
+          ...state.state,
           funds: state.state.funds,
           contract: state.state.contract,
           gasCosts: state.state.gasCosts,
           nonce: state.state.nonce,
           currentPrice: state.state.currentPrice,
-          balance: state.state.balance,
-          holdings: state.state.holdings,
         },
-        name: "NeedsToRegister",
       } satisfies NeedsToRegister);
+    }
+  }, [state]);
+
+  useEffect(() => {
+    if (state.name === "WaitingForGameStart") {
+      console.log("WaitingForGameStart state:", {
+        startHeight: state.state.startHeight,
+        endHeight: state.state.endHeight,
+        currentBlockHeight: state.state.currentBlockHeight,
+      });
+    }
+    if (
+      state.name === "WaitingForGameStart" &&
+      state.state.startHeight !== undefined &&
+      state.state.endHeight !== undefined &&
+      state.state.currentBlockHeight !== undefined
+    ) {
+      console.log("Moving to TradableState");
+      const initialPricePoint: PricePoint = {
+        blockNumber: state.state.startHeight,
+        price: state.state.currentPrice,
+        timestamp: new Date(),
+      };
+      setState({
+        name: "TradableState",
+        state: {
+          ...state.state,
+          startHeight: state.state.startHeight,
+          endHeight: state.state.endHeight,
+          currentBlockHeight: state.state.currentBlockHeight,
+          priceHistory: [initialPricePoint],
+        },
+      } satisfies TradableState);
     }
   }, [state]);
 
@@ -371,7 +537,6 @@ function App() {
       nonce,
       balance,
       holdings,
-      currentPrice,
     } = state.state;
     const isAlreadyRegistered =
       balance !== undefined &&
@@ -379,27 +544,12 @@ function App() {
       (balance > 0 || holdings > 0);
 
     if (isAlreadyRegistered) {
-      console.log("Already registered, moving to trading");
-      const initialPricePoint: PricePoint = {
-        blockNumber: 0,
-        price: currentPrice,
-        timestamp: new Date(),
-      };
+      console.log("Already registered, waiting for game to start");
+      console.log("Current state.state:", state.state);
       setState({
-        name: "TradableState",
-        state: {
-          wallet,
-          funds,
-          contract,
-          gasCosts,
-          nonce,
-          name,
-          currentPrice,
-          balance: balance!,
-          holdings: holdings!,
-          priceHistory: [initialPricePoint],
-        },
-      } satisfies TradableState);
+        name: "WaitingForGameStart",
+        state: { ...state.state, name, balance, holdings },
+      } satisfies WaitingForGameStart);
       return;
     }
 
@@ -423,15 +573,12 @@ function App() {
       setState({
         name: "AwaitingRegistration",
         state: {
-          wallet,
-          funds: funds - gasCost,
-          contract,
-          gasCosts,
-          nonce: nonce + 1,
+          ...state.state,
           name,
+          funds: funds - gasCost,
+          nonce: nonce + 1,
           balance,
           holdings,
-          currentPrice,
         },
       } satisfies AwaitingRegistration);
     } catch (e) {
@@ -495,38 +642,31 @@ function App() {
   };
 
   useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (consoleRef.current) {
+      consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
+    }
   }, [logs]);
 
   return (
     <div className="app">
+      <div className="floating-messages-layer">
+        {floatingMessages.map((msg) => (
+          <FloatingMessage
+            key={msg.id}
+            x={msg.x}
+            y={msg.y}
+            message={msg.message}
+            onComplete={() => {
+              setFloatingMessages((prev) =>
+                prev.filter((m) => m.id !== msg.id)
+              );
+            }}
+          />
+        ))}
+      </div>
       <header>
         <h1>MonoMarket</h1>
-        <div className={`status status-${state.name}`}>{state.name}</div>
       </header>
-
-      <div className="info-section">
-        <div className="wallet-info">
-          <strong>Address:</strong>{" "}
-          {state.name !== "InitialState"
-            ? state.state.wallet?.address
-            : "Loading..."}
-        </div>
-        {state.name === "TradableState" && (
-          <div className="balance-info">
-            <strong>Balance:</strong> {state.state.balance} credits
-            <br />
-            <strong>Holdings:</strong> {state.state.holdings} shares
-            <br />
-            <strong>Funds:</strong>{" "}
-            {Math.trunc(state.state.funds / 100_000_000_000_000).toString()} (~
-            {Math.trunc(
-              state.state.funds / (state.state.gasCosts.buy * Number(GAS_PRICE))
-            )}{" "}
-            txs left)
-          </div>
-        )}
-      </div>
 
       {state.name === "WaitingServerParams" && (
         <div className="loading-section">
@@ -599,34 +739,213 @@ function App() {
         </div>
       )}
 
+      {state.name === "WaitingForGameStart" && (
+        <div className="loading-section">
+          <div className="loading-spinner">
+            <svg width="80" height="80" viewBox="0 0 80 80">
+              <circle
+                cx="40"
+                cy="40"
+                r="32"
+                fill="none"
+                stroke="#569cd6"
+                strokeWidth="4"
+                strokeLinecap="round"
+                strokeDasharray="150 50"
+              >
+                <animateTransform
+                  attributeName="transform"
+                  type="rotate"
+                  from="0 40 40"
+                  to="360 40 40"
+                  dur="1.5s"
+                  repeatCount="indefinite"
+                />
+              </circle>
+              <circle
+                cx="40"
+                cy="40"
+                r="24"
+                fill="none"
+                stroke="#4ec9b0"
+                strokeWidth="3"
+                strokeLinecap="round"
+                strokeDasharray="100 50"
+              >
+                <animateTransform
+                  attributeName="transform"
+                  type="rotate"
+                  from="360 40 40"
+                  to="0 40 40"
+                  dur="2s"
+                  repeatCount="indefinite"
+                />
+              </circle>
+            </svg>
+          </div>
+          <p className="loading-text">Waiting for game to start...</p>
+        </div>
+      )}
+
+      {state.name === "GameEnded" && (
+        <div className="loading-section">
+          <div className="loading-spinner">
+            <svg width="80" height="80" viewBox="0 0 80 80">
+              <circle
+                cx="40"
+                cy="40"
+                r="32"
+                fill="none"
+                stroke="#f48771"
+                strokeWidth="4"
+                strokeLinecap="round"
+                strokeDasharray="150 50"
+              >
+                <animateTransform
+                  attributeName="transform"
+                  type="rotate"
+                  from="0 40 40"
+                  to="360 40 40"
+                  dur="1.5s"
+                  repeatCount="indefinite"
+                />
+              </circle>
+            </svg>
+          </div>
+          <p className="loading-text">Game Over</p>
+        </div>
+      )}
+
       {state.name === "TradableState" && (
         <>
-          {state.state.priceHistory.length >= 2 && (
+          {state.state.priceHistory.length >= 1 && (
             <div className="chart-section">
-              <h2>Price Chart</h2>
-              <PriceChart priceHistory={state.state.priceHistory} />
+              <div className="stat-cards">
+                <div className="stat-card">
+                  <div className="stat-label">Balance</div>
+                  <div className="stat-value">{state.state.balance}</div>
+                  <div className="stat-unit">credits</div>
+                </div>
+                <div className="stat-card">
+                  <div className="stat-label">Holdings</div>
+                  <div className="stat-value">{state.state.holdings}</div>
+                  <div className="stat-unit">shares</div>
+                </div>
+                <div className="stat-card">
+                  <div className="stat-label">Net Worth</div>
+                  <div className="stat-value">
+                    {state.state.balance +
+                      state.state.holdings * state.state.currentPrice}
+                  </div>
+                  <div className="stat-unit">total</div>
+                </div>
+              </div>
+
+              <div className="chart-with-gas">
+                <GasBar
+                  funds={state.state.funds}
+                  gasCostBuy={state.state.gasCosts.buy}
+                  gasPrice={GAS_PRICE}
+                />
+                <PriceChart priceHistory={state.state.priceHistory} />
+              </div>
             </div>
           )}
           <div className="trading-section">
             <button
-              onClick={() => sendTx({ txType: "buy", amount: 1 })}
-              disabled={
+              onClick={(e) => {
+                const isGameOver =
+                  state.state.priceHistory.length >= 2 &&
+                  state.state.priceHistory[state.state.priceHistory.length - 1]
+                    .blockNumber >= state.state.endHeight;
+                const isOutOfGas =
+                  state.state.funds <
+                  state.state.gasCosts.buy * Number(GAS_PRICE);
+                const isOutOfBalance =
+                  state.state.currentPrice > state.state.balance;
+                if (isGameOver || isOutOfGas || isOutOfBalance) {
+                  const messageId = messageIdRef.current++;
+                  const message = isGameOver
+                    ? "game over"
+                    : isOutOfGas
+                    ? "out of gas"
+                    : "not enough balance";
+                  setFloatingMessages((prev) => [
+                    ...prev,
+                    {
+                      id: messageId,
+                      x: e.clientX,
+                      y: e.clientY,
+                      message,
+                    },
+                  ]);
+                  setTimeout(() => {
+                    setFloatingMessages((prev) =>
+                      prev.filter((msg) => msg.id !== messageId)
+                    );
+                  }, 1300);
+                } else {
+                  sendTx({ txType: "buy", amount: 1 });
+                }
+              }}
+              className={`trade-btn buy-btn ${
+                (state.state.priceHistory.length >= 2 &&
+                  state.state.priceHistory[state.state.priceHistory.length - 1]
+                    .blockNumber >= state.state.endHeight) ||
                 state.state.funds <
                   state.state.gasCosts.buy * Number(GAS_PRICE) ||
                 state.state.currentPrice > state.state.balance
-              }
-              className="trade-btn buy-btn"
+                  ? "disabled"
+                  : ""
+              }`}
             >
               Buy
             </button>
             <button
-              onClick={() => sendTx({ txType: "sell", amount: 1 })}
-              disabled={
+              onClick={(e) => {
+                const isGameOver =
+                  state.state.priceHistory.length >= 2 &&
+                  state.state.priceHistory[state.state.priceHistory.length - 1]
+                    .blockNumber >= state.state.endHeight;
+                const isOutOfGas =
+                  state.state.funds <
+                  state.state.gasCosts.sell * Number(GAS_PRICE);
+                const isNoStocks = state.state.holdings < 1;
+                if (isGameOver || isOutOfGas || isNoStocks) {
+                  const messageId = messageIdRef.current++;
+                  const message = isGameOver
+                    ? "game over"
+                    : isOutOfGas
+                    ? "out of gas"
+                    : "no stocks";
+                  setFloatingMessages((prev) => [
+                    ...prev,
+                    {
+                      id: messageId,
+                      x: e.clientX,
+                      y: e.clientY,
+                      message,
+                    },
+                  ]);
+                  setTimeout(() => {
+                    setFloatingMessages((prev) =>
+                      prev.filter((msg) => msg.id !== messageId)
+                    );
+                  }, 1300);
+                } else {
+                  sendTx({ txType: "sell", amount: 1 });
+                }
+              }}
+              className={`trade-btn sell-btn ${
+                (state.state.priceHistory.length >= 2 &&
+                  state.state.priceHistory[state.state.priceHistory.length - 1]
+                    .blockNumber >= state.state.endHeight) ||
                 state.state.funds <
                   state.state.gasCosts.sell * Number(GAS_PRICE) ||
                 state.state.holdings < 1
-              }
-              className="trade-btn sell-btn"
+                  ? "disabled"
+                  : ""
+              }`}
             >
               Sell
             </button>
@@ -680,7 +999,7 @@ function App() {
 
       <div className="console-section">
         <h2>Console</h2>
-        <div className="console">
+        <div className="console" ref={consoleRef}>
           {logs.map((log, i) => (
             <div key={i} className={`log-entry log-${log.logType}`}>
               <span className="log-time">

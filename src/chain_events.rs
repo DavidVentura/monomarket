@@ -74,6 +74,29 @@ pub async fn process_chain_events(
                 };
                 let _ = broadcast_tx.send(msg);
             }
+            Some(&StockMarket::Started::SIGNATURE_HASH) => {
+                let event = StockMarket::Started::decode_log(&log.inner, true)?;
+                let start_block: u64 = event.startBlock.to();
+                let end_block: u64 = event.endBlock.to();
+
+                tracing::info!("🎮 Game started: blocks {} to {}", start_block, end_block);
+
+                let mut state_guard = state.write().await;
+                state_guard.game_start_block = Some(start_block);
+                state_guard.game_end_block = Some(end_block);
+
+                let msg = ServerMessage::GameStarted {
+                    start_height: start_block,
+                    end_height: end_block,
+                };
+                let _ = broadcast_tx.send(msg);
+            }
+            Some(&StockMarket::ContractEnded::SIGNATURE_HASH) => {
+                tracing::info!("🏁 Game ended");
+
+                let msg = ServerMessage::GameEnded;
+                let _ = broadcast_tx.send(msg);
+            }
             Some(other) => {
                 tracing::error!("Unexpected event {other:?}");
             }

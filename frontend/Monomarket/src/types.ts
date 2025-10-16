@@ -17,6 +17,7 @@ export type ServerMessage =
       block_number: number;
     }
   | { type: "current_price"; price: number }
+  | { type: "current_block_height"; height: number }
   | { type: "name_set"; address: string; name: string }
   | {
       type: "position";
@@ -26,7 +27,9 @@ export type ServerMessage =
       block_number: number;
     }
   | { type: "tx_error"; error: string }
-  | { type: "tx_submitted"; tx_hash: string };
+  | { type: "tx_submitted"; tx_hash: string }
+  | { type: "game_started"; start_height: number; end_height: number }
+  | { type: "game_ended" };
 
 export type ClientMessage =
   | { type: "set_name"; name: string; address: string }
@@ -40,7 +43,9 @@ export type State =
   | WaitingServerParams
   | NeedsToRegister
   | AwaitingRegistration
-  | TradableState;
+  | WaitingForGameStart
+  | TradableState
+  | GameEnded;
 
 export type InitialState = {
   name: "InitialState";
@@ -60,6 +65,9 @@ export type WaitingServerParams = {
     balance?: number;
     holdings?: number;
     currentPrice?: number;
+    startHeight?: number;
+    endHeight?: number;
+    currentBlockHeight?: number;
   };
 };
 
@@ -74,6 +82,9 @@ export type NeedsToRegister = {
     balance?: number;
     holdings?: number;
     currentPrice: number;
+    startHeight?: number;
+    endHeight?: number;
+    currentBlockHeight?: number;
   };
 };
 
@@ -89,6 +100,27 @@ export type AwaitingRegistration = {
     balance?: number;
     holdings?: number;
     currentPrice: number;
+    startHeight?: number;
+    endHeight?: number;
+    currentBlockHeight?: number;
+  };
+};
+
+export type WaitingForGameStart = {
+  name: "WaitingForGameStart";
+  state: {
+    wallet: ethers.Wallet;
+    funds: number;
+    contract: ethers.Contract;
+    gasCosts: GasInfo;
+    nonce: number;
+    name: string;
+    balance: number;
+    holdings: number;
+    currentPrice: number;
+    startHeight?: number;
+    endHeight?: number;
+    currentBlockHeight?: number;
   };
 };
 
@@ -110,6 +142,28 @@ export type TradableState = {
     currentPrice: number;
     balance: number;
     holdings: number;
+    startHeight: number;
+    endHeight: number;
+    currentBlockHeight: number;
+    priceHistory: PricePoint[];
+  };
+};
+
+export type GameEnded = {
+  name: "GameEnded";
+  state: {
+    wallet: ethers.Wallet;
+    funds: number;
+    contract: ethers.Contract;
+    gasCosts: GasInfo;
+    nonce: number;
+    name: string;
+    currentPrice: number;
+    balance: number;
+    holdings: number;
+    startHeight: number;
+    endHeight: number;
+    currentBlockHeight: number;
     priceHistory: PricePoint[];
   };
 };

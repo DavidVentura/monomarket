@@ -5,6 +5,10 @@ contract StockMarket {
     uint256 public price = 50;
     uint256 public lastTickBlock;
 
+    uint256 public startBlock;
+    uint256 public endBlock;
+    address public owner;
+
     uint256 public constant INITIAL_CREDITS = 1000;
     uint256 public constant MIN_PRICE = 1;
     uint256 public constant MAX_PRICE = 100;
@@ -21,6 +25,23 @@ contract StockMarket {
     event PriceUpdate(uint256 newPrice, uint256 blockNumber);
     event Position(address indexed user, uint256 balance, uint256 holdings, uint256 blockNumber);
     event NewUser(address indexed user);
+    event Started(uint256 startBlock, uint256 endBlock);
+    event ContractEnded();
+
+    constructor() {
+        owner = msg.sender;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner");
+        _;
+    }
+
+    modifier whenActive() {
+        require(startBlock > 0, "Contract not started");
+        require(block.number <= endBlock, "Contract has ended");
+        _;
+    }
 
     modifier initializeUser() {
         _initializeUser();
@@ -38,6 +59,14 @@ contract StockMarket {
         }
     }
 
+    function start(uint256 length) external onlyOwner {
+	// for development
+        // require(startBlock == 0, "Already started");
+        startBlock = block.number;
+        endBlock = block.number + length;
+        emit Started(startBlock, endBlock);
+    }
+
     function register() external {
         UserData storage user = userData[msg.sender];
         if (!user.isActive) {
@@ -52,6 +81,14 @@ contract StockMarket {
     function tick() external {
         require(lastTickBlock < block.number, "Already ticked this block");
         lastTickBlock = block.number;
+
+        if (startBlock > 0 && block.number > endBlock) {
+            emit ContractEnded();
+            return;
+        }
+
+        require(startBlock > 0, "Contract not started");
+        require(block.number <= endBlock, "Contract has ended");
 
         uint256 randomSeed = uint256(keccak256(abi.encodePacked(
             block.timestamp,
@@ -69,7 +106,7 @@ contract StockMarket {
         // forge-lint: disable-next-line(unsafe-typecast)
         if (newPriceInt < int256(MIN_PRICE)) {
             // forge-lint: disable-next-line(unsafe-typecast)
-            newPriceInt = -newPriceInt;
+            newPriceInt = int256(MIN_PRICE) * 2 - newPriceInt;
         }
         // forge-lint: disable-next-line(unsafe-typecast)
         if (newPriceInt > int256(MAX_PRICE)) {
@@ -82,7 +119,7 @@ contract StockMarket {
         emit PriceUpdate(price, block.number);
     }
 
-    function buy(uint256 amount) external {
+    function buy(uint256 amount) external whenActive {
         UserData storage user = userData[msg.sender];
         require(user.isActive, "Not registered");
         require(amount > 0, "Amount must be greater than 0");
@@ -101,7 +138,7 @@ contract StockMarket {
         emit Position(msg.sender, user.balance, user.holdings, block.number);
     }
 
-    function sell(uint256 amount) external {
+    function sell(uint256 amount) external whenActive {
         UserData storage user = userData[msg.sender];
         require(user.isActive, "Not registered");
         require(amount > 0, "Amount must be greater than 0");
