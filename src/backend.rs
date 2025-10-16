@@ -155,23 +155,6 @@ where
     let tx_hash = *pending.tx_hash();
     tracing::info!("📤 Tick tx sent: {:?} (nonce: {})", tx_hash, nonce);
 
-    let receipt = pending.get_receipt().await?;
-    tracing::info!(
-        "✅ Tick tx confirmed: {:?} (block: {}, status: {})",
-        tx_hash,
-        receipt.block_number.unwrap_or_default(),
-        if receipt.status() {
-            "success"
-        } else {
-            "failed"
-        }
-    );
-
-    if !receipt.status() {
-        let error_msg = format!("Tick transaction failed: {:?}", tx_hash);
-        tracing::error!("{}", error_msg);
-    }
-
     Ok(())
 }
 
