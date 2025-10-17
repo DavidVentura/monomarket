@@ -27,6 +27,7 @@ use ws::ServerMessage;
 pub enum BackendTxEvent {
     Fund(Address, mpsc::Sender<ServerMessage>),
     Tick,
+    GameOver,
 }
 
 pub struct AppState {
@@ -122,7 +123,11 @@ async fn main() -> Result<()> {
     let end_block = contract.endBlock().call().await?._0;
 
     if start_block > 0 {
-        tracing::info!("Game state: started at block {}, ends at block {}", start_block, end_block);
+        tracing::info!(
+            "Game state: started at block {}, ends at block {}",
+            start_block,
+            end_block
+        );
         let mut state_guard = state.write().await;
         state_guard.game_start_block = Some(start_block.to());
         state_guard.game_end_block = Some(end_block.to());
@@ -193,6 +198,7 @@ async fn main() -> Result<()> {
     let state_clone_blocks = state.clone();
     let backend_tx_sender_clone_blocks = backend_tx_sender.clone();
     tokio::spawn(async move {
+        let mut last_ended_block = 0u64;
         while let Some(block) = block_stream.next().await {
             let block_number = block.number;
             tracing::info!(
@@ -206,23 +212,24 @@ async fn main() -> Result<()> {
                 state_guard.current_block_height = block_number;
             }
 
-            let should_tick = {
+            let game_end_block = {
                 let state_guard = state_clone_blocks.read().await;
-                let last_position_block = state_guard.last_position_block;
-
-                if last_position_block == 0 {
-                    false
-                } else {
-                    let blocks_since_position = block_number.saturating_sub(last_position_block);
-                    blocks_since_position <= 30
-                }
+                state_guard.game_end_block
             };
 
-            if should_tick {
-                tracing::info!("⏰ Auto-tick triggered on block {}", block_number);
-                let _ = backend_tx_sender_clone_blocks
-                    .send(BackendTxEvent::Tick)
-                    .await;
+            if let Some(ends_at) = game_end_block {
+                if ends_at > last_ended_block && block_number >= ends_at {
+                    last_ended_block = ends_at;
+                    let _ = backend_tx_sender_clone_blocks
+                        .send(BackendTxEvent::GameOver)
+                        .await;
+                }
+                if ends_at > block_number {
+                    tracing::info!("⏰ Auto-tick triggered on block {}", block_number);
+                    let _ = backend_tx_sender_clone_blocks
+                        .send(BackendTxEvent::Tick)
+                        .await;
+                }
             }
         }
     });

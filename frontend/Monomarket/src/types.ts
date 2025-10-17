@@ -146,6 +146,7 @@ export type TradableState = {
     endHeight: number;
     currentBlockHeight: number;
     priceHistory: PricePoint[];
+    firstBlockTimestamp?: Date;
   };
 };
 
@@ -165,6 +166,7 @@ export type GameEnded = {
     endHeight: number;
     currentBlockHeight: number;
     priceHistory: PricePoint[];
+    firstBlockTimestamp?: Date;
   };
 };
 

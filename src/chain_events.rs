@@ -44,8 +44,13 @@ pub async fn process_chain_events(
                 let holdings: u64 = event.holdings.to();
                 let block_number: u64 = event.blockNumber.to();
 
-                tracing::info!("💼 Position update: {:?} | balance: {}, holdings: {} (block {})",
-                    user_addr, balance, holdings, block_number);
+                tracing::info!(
+                    "💼 Position update: {:?} | balance: {}, holdings: {} (block {})",
+                    user_addr,
+                    balance,
+                    holdings,
+                    block_number
+                );
 
                 let mut state_guard = state.write().await;
                 state_guard.balances.insert(user_addr, balance);
@@ -89,12 +94,6 @@ pub async fn process_chain_events(
                     start_height: start_block,
                     end_height: end_block,
                 };
-                let _ = broadcast_tx.send(msg);
-            }
-            Some(&StockMarket::ContractEnded::SIGNATURE_HASH) => {
-                tracing::info!("🏁 Game ended");
-
-                let msg = ServerMessage::GameEnded;
                 let _ = broadcast_tx.send(msg);
             }
             Some(other) => {

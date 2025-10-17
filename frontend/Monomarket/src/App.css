@@ -139,6 +139,13 @@ h2 {
   animation: pulse 2s ease-in-out infinite;
 }
 
+.winner-text {
+  font-size: 1.3rem;
+  font-weight: bold;
+  color: #d4d4d4;
+  margin-top: 10px;
+}
+
 @keyframes pulse {
   0%, 100% {
     opacity: 0.6;

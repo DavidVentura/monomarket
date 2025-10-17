@@ -9,7 +9,8 @@ contract StockMarket {
     uint256 public endBlock;
     address public owner;
 
-    uint256 public constant INITIAL_CREDITS = 1000;
+    uint256 public constant INITIAL_STOCKS = 10;
+    uint256 public constant INITIAL_CREDITS = 500;
     uint256 public constant MIN_PRICE = 1;
     uint256 public constant MAX_PRICE = 100;
 
@@ -26,7 +27,6 @@ contract StockMarket {
     event Position(address indexed user, uint256 balance, uint256 holdings, uint256 blockNumber);
     event NewUser(address indexed user);
     event Started(uint256 startBlock, uint256 endBlock);
-    event ContractEnded();
 
     constructor() {
         owner = msg.sender;
@@ -43,22 +43,6 @@ contract StockMarket {
         _;
     }
 
-    modifier initializeUser() {
-        _initializeUser();
-        _;
-    }
-
-    function _initializeUser() internal {
-        UserData storage user = userData[msg.sender];
-        if (!user.isActive) {
-            // forge-lint: disable-next-line(unsafe-typecast)
-            user.balance = uint128(INITIAL_CREDITS);
-            user.isActive = true;
-            activeAddresses.push(msg.sender);
-            emit NewUser(msg.sender);
-        }
-    }
-
     function start(uint256 length) external onlyOwner {
 	// for development
         // require(startBlock == 0, "Already started");
@@ -67,11 +51,26 @@ contract StockMarket {
         emit Started(startBlock, endBlock);
     }
 
+    function reset() external onlyOwner {
+        price = 50;
+        lastTickBlock = 0;
+
+        for (uint256 i = 0; i < activeAddresses.length; i++) {
+            address player = activeAddresses[i];
+            userData[player].balance = uint128(INITIAL_CREDITS);
+            userData[player].holdings = uint128(INITIAL_STOCKS);
+            emit Position(player, INITIAL_CREDITS, INITIAL_STOCKS, block.number);
+        }
+
+        emit PriceUpdate(price, block.number);
+    }
+
     function register() external {
         UserData storage user = userData[msg.sender];
         if (!user.isActive) {
             // forge-lint: disable-next-line(unsafe-typecast)
             user.balance = uint128(INITIAL_CREDITS);
+            user.holdings = uint128(INITIAL_STOCKS);
             user.isActive = true;
             activeAddresses.push(msg.sender);
         }
@@ -80,12 +79,8 @@ contract StockMarket {
 
     function tick() external {
         require(lastTickBlock < block.number, "Already ticked this block");
-        lastTickBlock = block.number;
-
-        if (startBlock > 0 && block.number > endBlock) {
-            emit ContractEnded();
-            return;
-        }
+        require(startBlock > 0 && block.number <= endBlock, "Contract ended");
+	lastTickBlock = block.number;
 
         require(startBlock > 0, "Contract not started");
         require(block.number <= endBlock, "Contract has ended");

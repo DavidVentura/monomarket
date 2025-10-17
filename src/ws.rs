@@ -132,24 +132,30 @@ where
         };
         let json = serde_json::to_string(&current_block_msg)?;
         ws_sender.send(Message::Text(json)).await?;
-        tracing::info!("Sent current block height {} to client", state_guard.current_block_height);
+        tracing::info!(
+            "Sent current block height {} to client",
+            state_guard.current_block_height
+        );
 
-        if let (Some(start_block), Some(end_block)) = (state_guard.game_start_block, state_guard.game_end_block) {
+        if let (Some(start_block), Some(end_block)) =
+            (state_guard.game_start_block, state_guard.game_end_block)
+        {
             let current_height = state_guard.current_block_height;
 
-            if current_height > end_block {
-                let game_ended_msg = ServerMessage::GameEnded;
-                let json = serde_json::to_string(&game_ended_msg)?;
-                ws_sender.send(Message::Text(json)).await?;
-                tracing::info!("Sent game ended to client (current: {}, end: {})", current_height, end_block);
-            } else {
+            if current_height <= end_block {
+                // only send start on join if started, otherwise they wait until next time
                 let game_started_msg = ServerMessage::GameStarted {
                     start_height: start_block,
                     end_height: end_block,
                 };
                 let json = serde_json::to_string(&game_started_msg)?;
                 ws_sender.send(Message::Text(json)).await?;
-                tracing::info!("Sent game lifecycle info to client: {} to {} (current: {})", start_block, end_block, current_height);
+                tracing::info!(
+                    "Sent game lifecycle info to client: {} to {} (current: {})",
+                    start_block,
+                    end_block,
+                    current_height
+                );
             }
         }
         let name_count = state_guard.names.len();

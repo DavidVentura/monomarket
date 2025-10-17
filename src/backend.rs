@@ -37,8 +37,11 @@ where
 {
     let balance = provider.get_balance(addr).await?;
     tracing::info!("Balance for {:?}: {} wei", addr, balance);
+    let factor = 1_000_000_000_000_000u64;
 
-    if balance > U256::ZERO {
+    //if balance > U256::ZERO {
+    if balance > 45 * factor {
+        // TODO development
         tracing::info!(
             "Address already funded, reading holdings and sending Funded and Position events"
         );
@@ -204,6 +207,9 @@ where
                     };
                     let _ = client_tx.send(msg).await;
                 }
+            }
+            BackendTxEvent::GameOver => {
+                let _ = broadcast_tx.send(ServerMessage::GameEnded);
             }
             BackendTxEvent::Tick => {
                 tracing::info!("Processing Tick event");

@@ -150,123 +150,92 @@ function App() {
 
         case "price_update": {
           setState((prev) => {
-            if (prev.name === "WaitingServerParams") {
-              return {
-                name: prev.name,
-                state: {
-                  ...prev.state,
-                  currentPrice: data.new_price,
-                  currentBlockHeight: data.block_number,
-                },
-              };
-            }
-            if (prev.name === "NeedsToRegister") {
-              return {
-                name: prev.name,
-                state: {
-                  ...prev.state,
-                  currentPrice: data.new_price,
-                  currentBlockHeight: data.block_number,
-                },
-              };
-            }
-            if (prev.name === "WaitingForGameStart") {
-              return {
-                name: prev.name,
-                state: {
-                  ...prev.state,
-                  currentPrice: data.new_price,
-                  currentBlockHeight: data.block_number,
-                },
-              };
-            }
-            if (prev.name === "TradableState") {
-              const newPricePoint: PricePoint = {
-                blockNumber: data.block_number,
-                price: data.new_price,
-                timestamp: new Date(),
-              };
-              const updatedHistory = [
-                ...prev.state.priceHistory,
-                newPricePoint,
-              ];
-              const limitedHistory = updatedHistory.slice(-200);
+            switch (prev.name) {
+              case "WaitingServerParams":
+              case "NeedsToRegister":
+              case "WaitingForGameStart":
+                return {
+                  ...prev,
+                  state: {
+                    ...prev.state,
+                    currentPrice: data.new_price,
+                    currentBlockHeight: data.block_number,
+                  },
+                } as State;
 
-              return {
-                name: prev.name,
-                state: {
-                  ...prev.state,
-                  currentPrice: data.new_price,
-                  currentBlockHeight: data.block_number,
-                  priceHistory: limitedHistory,
-                },
-              };
+              case "TradableState": {
+                const newPricePoint: PricePoint = {
+                  blockNumber: data.block_number,
+                  price: data.new_price,
+                  timestamp: new Date(),
+                };
+                const updatedHistory = [
+                  ...prev.state.priceHistory,
+                  newPricePoint,
+                ];
+                const limitedHistory = updatedHistory.slice(-200);
+
+                const firstBlockTimestamp =
+                  prev.state.firstBlockTimestamp || new Date();
+
+                return {
+                  ...prev,
+                  state: {
+                    ...prev.state,
+                    currentPrice: data.new_price,
+                    currentBlockHeight: data.block_number,
+                    priceHistory: limitedHistory,
+                    firstBlockTimestamp,
+                  },
+                } as State;
+              }
+
+              default:
+                return prev;
             }
-            return prev;
           });
           break;
         }
 
         case "current_price": {
           setState((prev) => {
-            if (prev.name === "WaitingServerParams") {
-              return {
-                name: prev.name,
-                state: { ...prev.state, currentPrice: data.price },
-              };
+            switch (prev.name) {
+              case "WaitingServerParams":
+              case "NeedsToRegister":
+              case "WaitingForGameStart":
+              case "TradableState":
+                return {
+                  ...prev,
+                  state: {
+                    ...prev.state,
+                    currentPrice: data.price,
+                  },
+                } as State;
+              default:
+                return prev;
             }
-            if (prev.name === "NeedsToRegister") {
-              return {
-                name: prev.name,
-                state: { ...prev.state, currentPrice: data.price },
-              };
-            }
-            if (prev.name === "WaitingForGameStart") {
-              return {
-                name: prev.name,
-                state: { ...prev.state, currentPrice: data.price },
-              };
-            }
-            if (prev.name === "TradableState") {
-              return {
-                name: prev.name,
-                state: { ...prev.state, currentPrice: data.price },
-              };
-            }
-            return prev;
           });
           break;
         }
 
         case "current_block_height": {
           setState((prev) => {
-            if (prev.name === "WaitingServerParams") {
-              return {
-                name: prev.name,
-                state: { ...prev.state, currentBlockHeight: data.height },
-              };
-            } else if (prev.name === "NeedsToRegister") {
-              return {
-                name: prev.name,
-                state: { ...prev.state, currentBlockHeight: data.height },
-              };
-            } else if (prev.name === "AwaitingRegistration") {
-              return {
-                name: prev.name,
-                state: { ...prev.state, currentBlockHeight: data.height },
-              };
-            } else if (prev.name === "WaitingForGameStart") {
-              return {
-                name: prev.name,
-                state: { ...prev.state, currentBlockHeight: data.height },
-              };
-            } else if (prev.name === "TradableState") {
-              return {
-                name: prev.name,
-                state: { ...prev.state, currentBlockHeight: data.height },
-              };
+            switch (prev.name) {
+              case "WaitingServerParams":
+              case "NeedsToRegister":
+              case "AwaitingRegistration":
+              case "WaitingForGameStart":
+              case "TradableState":
+                return {
+                  ...prev,
+                  state: {
+                    ...prev.state,
+                    currentBlockHeight: data.height,
+                  },
+                } as State;
+              default:
+                return prev;
             }
-            return prev;
           });
           break;
         }
@@ -314,48 +283,32 @@ function App() {
 
             if (!isOurAddress) return prev;
 
-            if (prev.name === "WaitingServerParams") {
-              return {
-                name: prev.name,
-                state: {
-                  ...prev.state,
-                  balance: data.balance,
-                  holdings: data.holdings,
-                },
-              };
+            switch (prev.name) {
+              case "WaitingServerParams":
+              case "NeedsToRegister":
+              case "TradableState":
+                return {
+                  ...prev,
+                  state: {
+                    ...prev.state,
+                    balance: data.balance,
+                    holdings: data.holdings,
+                  },
+                } as State;
+
+              case "AwaitingRegistration":
+                return {
+                  name: "WaitingForGameStart",
+                  state: {
+                    ...prev.state,
+                    balance: data.balance,
+                    holdings: data.holdings,
+                  },
+                };
+
+              default:
+                return prev;
             }
-            if (prev.name === "NeedsToRegister") {
-              return {
-                name: prev.name,
-                state: {
-                  ...prev.state,
-                  balance: data.balance,
-                  holdings: data.holdings,
-                },
-              };
-            }
-            if (prev.name === "AwaitingRegistration") {
-              addLog("Registration confirmed!", "info");
-              return {
-                name: "WaitingForGameStart",
-                state: {
-                  ...prev.state,
-                  balance: data.balance,
-                  holdings: data.holdings,
-                },
-              } satisfies WaitingForGameStart;
-            }
-            if (prev.name === "TradableState") {
-              return {
-                name: prev.name,
-                state: {
-                  ...prev.state,
-                  balance: data.balance,
-                  holdings: data.holdings,
-                },
-              };
-            }
-            return prev;
           });
           break;
         }
@@ -374,52 +327,34 @@ function App() {
           console.log(
             `Game started: blocks ${data.start_height} to ${data.end_height}`
           );
+          addLog(`Game started`, "info");
           setState((prev) => {
-            if (prev.name === "WaitingServerParams") {
+            if (
+              prev.name === "WaitingServerParams" ||
+              prev.name === "NeedsToRegister" ||
+              prev.name === "AwaitingRegistration" ||
+              prev.name === "WaitingForGameStart" ||
+              prev.name === "TradableState"
+            ) {
               return {
-                name: prev.name,
+                ...prev,
                 state: {
                   ...prev.state,
                   startHeight: data.start_height,
                   endHeight: data.end_height,
                 },
-              };
-            } else if (prev.name === "NeedsToRegister") {
+              } as State;
+            }
+            if (prev.name === "GameEnded") {
               return {
-                name: prev.name,
+                name: "WaitingForGameStart",
                 state: {
                   ...prev.state,
                   startHeight: data.start_height,
                   endHeight: data.end_height,
+                  currentBlockHeight: undefined,
                 },
-              };
-            } else if (prev.name === "AwaitingRegistration") {
-              return {
-                name: prev.name,
-                state: {
-                  ...prev.state,
-                  startHeight: data.start_height,
-                  endHeight: data.end_height,
-                },
-              };
-            } else if (prev.name === "WaitingForGameStart") {
-              return {
-                name: prev.name,
-                state: {
-                  ...prev.state,
-                  startHeight: data.start_height,
-                  endHeight: data.end_height,
-                },
-              };
-            } else if (prev.name === "TradableState") {
-              return {
-                name: prev.name,
-                state: {
-                  ...prev.state,
-                  startHeight: data.start_height,
-                  endHeight: data.end_height,
-                },
-              };
+              } satisfies WaitingForGameStart;
             }
             return prev;
           });
@@ -481,13 +416,6 @@ function App() {
   }, [state]);
 
   useEffect(() => {
-    if (state.name === "WaitingForGameStart") {
-      console.log("WaitingForGameStart state:", {
-        startHeight: state.state.startHeight,
-        endHeight: state.state.endHeight,
-        currentBlockHeight: state.state.currentBlockHeight,
-      });
-    }
     if (
       state.name === "WaitingForGameStart" &&
       state.state.startHeight !== undefined &&
@@ -529,15 +457,8 @@ function App() {
       address: state.state.wallet.address,
     });
 
-    const {
-      wallet,
-      funds,
-      contract,
-      gasCosts,
-      nonce,
-      balance,
-      holdings,
-    } = state.state;
+    const { wallet, funds, contract, gasCosts, nonce, balance, holdings } =
+      state.state;
     const isAlreadyRegistered =
       balance !== undefined &&
       holdings !== undefined &&
@@ -725,6 +646,7 @@ function App() {
             onKeyDown={(e) => e.key === "Enter" && handleSetName()}
             placeholder="Enter your name"
             className="name-input"
+            maxLength={16}
             autoFocus
           />
           <button onClick={handleSetName} className="name-btn">
@@ -789,34 +711,28 @@ function App() {
 
       {state.name === "GameEnded" && (
         <div className="loading-section">
-          <div className="loading-spinner">
-            <svg width="80" height="80" viewBox="0 0 80 80">
-              <circle
-                cx="40"
-                cy="40"
-                r="32"
-                fill="none"
-                stroke="#f48771"
-                strokeWidth="4"
-                strokeLinecap="round"
-                strokeDasharray="150 50"
-              >
-                <animateTransform
-                  attributeName="transform"
-                  type="rotate"
-                  from="0 40 40"
-                  to="360 40 40"
-                  dur="1.5s"
-                  repeatCount="indefinite"
-                />
-              </circle>
-            </svg>
-          </div>
           <p className="loading-text">Game Over</p>
+          <p className="winner-text">
+            Winner:{" "}
+            {(() => {
+              const sorted = Array.from(currentPortfolio.entries())
+                .map(([address, portfolio]) => {
+                  const price = state.state.currentPrice;
+                  const netWorth =
+                    portfolio.balance + portfolio.holdings * price;
+                  return { address, netWorth };
+                })
+                .sort((a, b) => b.netWorth - a.netWorth);
+
+              if (sorted.length === 0) return "Unknown";
+              const winnerAddress = sorted[0].address;
+              return names.get(winnerAddress) || "Unknown";
+            })()}
+          </p>
         </div>
       )}
 
-      {state.name === "TradableState" && (
+      {(state.name === "TradableState" || state.name === "GameEnded") && (
         <>
           {state.state.priceHistory.length >= 1 && (
             <div className="chart-section">
@@ -839,6 +755,96 @@ function App() {
                   </div>
                   <div className="stat-unit">total</div>
                 </div>
+                {state.name === "TradableState" && (
+                  <div className="stat-card stat-card-timer">
+                    <div className="stat-label">Time Remaining</div>
+                    <div
+                      className="stat-value"
+                      style={{
+                        color: (() => {
+                          const blocksRemaining = Math.max(
+                            0,
+                            state.state.endHeight -
+                              state.state.currentBlockHeight
+                          );
+
+                          if (!state.state.firstBlockTimestamp) {
+                            return "#858585";
+                          }
+
+                          const elapsedMs =
+                            new Date().getTime() -
+                            state.state.firstBlockTimestamp.getTime();
+                          const elapsedSeconds = elapsedMs / 1000;
+                          const blocksPassed =
+                            state.state.currentBlockHeight -
+                            state.state.startHeight;
+
+                          if (blocksPassed < 5 || elapsedSeconds <= 0) {
+                            return "#858585";
+                          }
+
+                          const secondsPerBlock = elapsedSeconds / blocksPassed;
+                          const estimatedSecondsRemaining =
+                            blocksRemaining * secondsPerBlock;
+
+                          const ratio = Math.min(
+                            1,
+                            Math.max(0, estimatedSecondsRemaining / 90)
+                          );
+                          const hue = ratio * 120;
+
+                          return `hsl(${hue}, 70%, 60%)`;
+                        })(),
+                      }}
+                    >
+                      {(() => {
+                        const blocksRemaining = Math.max(
+                          0,
+                          state.state.endHeight - state.state.currentBlockHeight
+                        );
+
+                        if (!state.state.firstBlockTimestamp) {
+                          return "--";
+                        }
+
+                        const elapsedMs =
+                          new Date().getTime() -
+                          state.state.firstBlockTimestamp.getTime();
+                        const elapsedSeconds = elapsedMs / 1000;
+                        const blocksPassed =
+                          state.state.currentBlockHeight -
+                          state.state.startHeight;
+
+                        if (blocksPassed < 5 || elapsedSeconds <= 0) {
+                          return "--";
+                        }
+
+                        const secondsPerBlock = elapsedSeconds / blocksPassed;
+                        const estimatedSecondsRemaining = Math.round(
+                          blocksRemaining * secondsPerBlock
+                        );
+
+                        if (estimatedSecondsRemaining < 60) {
+                          return `${estimatedSecondsRemaining}s`;
+                        } else {
+                          const minutes = Math.floor(
+                            estimatedSecondsRemaining / 60
+                          );
+                          const seconds = estimatedSecondsRemaining % 60;
+                          return `${minutes}m ${seconds}s`;
+                        }
+                      })()}
+                    </div>
+                    <div className="stat-unit">
+                      {Math.max(
+                        0,
+                        state.state.endHeight - state.state.currentBlockHeight
+                      )}{" "}
+                      blocks
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="chart-with-gas">
