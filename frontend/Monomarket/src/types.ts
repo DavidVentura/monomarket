@@ -34,7 +34,8 @@ export type ServerMessage =
 export type ClientMessage =
   | { type: "set_name"; name: string; address: string }
   | { type: "raw_tx"; raw_tx: string }
-  | { type: "get_nonce"; address: string };
+  | { type: "get_nonce"; address: string }
+  | { type: "restart_game" };
 
 export type AppStatus = "disconnected" | "connected" | "funded";
 

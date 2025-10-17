@@ -68,6 +68,17 @@ function App() {
     }
   };
 
+  const isAdmin = () => {
+    return document.cookie
+      .split(";")
+      .some((item) => item.trim().startsWith("ADMIN=1"));
+  };
+
+  const handleRestartGame = () => {
+    sendMessage({ type: "restart_game" });
+    addLog("Restart game requested", "info");
+  };
+
   useEffect(() => {
     const privateKey = localStorage.getItem("wallet_privateKey");
     let loadedWallet: ethers.Wallet;
@@ -102,11 +113,11 @@ function App() {
         case "funded": {
           console.log(`Funded: ${data.amount} wei`);
           setState((prev) => {
-            if (prev.name !== "WaitingServerParams") return prev;
+            if (prev.name === "InitialState") return prev;
             return {
-              name: prev.name,
+              ...prev,
               state: { ...prev.state, funds: data.amount },
-            };
+            } as State;
           });
           break;
         }
@@ -253,7 +264,10 @@ function App() {
           const previousHoldings = prevHoldingsRef.current.get(addressLower);
           const playerName = namesRef.current.get(addressLower) || "Unknown";
 
-          if (previousHoldings !== undefined) {
+          if (
+            previousHoldings !== undefined &&
+            state.name === "TradableState"
+          ) {
             const holdingsDiff = data.holdings - previousHoldings;
             if (holdingsDiff > 0) {
               addLog(`${playerName} bought`, "info");
@@ -346,10 +360,11 @@ function App() {
               } as State;
             }
             if (prev.name === "GameEnded") {
+              const { firstBlockTimestamp, priceHistory, ...restState } = prev.state;
               return {
                 name: "WaitingForGameStart",
                 state: {
-                  ...prev.state,
+                  ...restState,
                   startHeight: data.start_height,
                   endHeight: data.end_height,
                   currentBlockHeight: undefined,
@@ -436,6 +451,7 @@ function App() {
           endHeight: state.state.endHeight,
           currentBlockHeight: state.state.currentBlockHeight,
           priceHistory: [initialPricePoint],
+          firstBlockTimestamp: undefined,
         },
       } satisfies TradableState);
     }
@@ -706,6 +722,11 @@ function App() {
             </svg>
           </div>
           <p className="loading-text">Waiting for game to start...</p>
+          {isAdmin() && (
+            <button onClick={handleRestartGame} className="admin-restart-btn">
+              Restart Game
+            </button>
+          )}
         </div>
       )}
 
@@ -729,6 +750,11 @@ function App() {
               return names.get(winnerAddress) || "Unknown";
             })()}
           </p>
+          {isAdmin() && (
+            <button onClick={handleRestartGame} className="admin-restart-btn">
+              Restart Game
+            </button>
+          )}
         </div>
       )}
 
@@ -780,7 +806,7 @@ function App() {
                             state.state.currentBlockHeight -
                             state.state.startHeight;
 
-                          if (blocksPassed < 5 || elapsedSeconds <= 0) {
+                          if (blocksPassed < 10 || elapsedSeconds <= 0) {
                             return "#858585";
                           }
 
@@ -816,7 +842,7 @@ function App() {
                           state.state.currentBlockHeight -
                           state.state.startHeight;
 
-                        if (blocksPassed < 5 || elapsedSeconds <= 0) {
+                        if (blocksPassed < 10 || elapsedSeconds <= 0) {
                           return "--";
                         }
 

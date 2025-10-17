@@ -20,6 +20,7 @@ pub enum ClientMessage {
     SetName { name: String, address: String },
     RawTx { raw_tx: String },
     GetNonce { address: String },
+    RestartGame,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,7 +94,7 @@ pub async fn handle_connection<T, P>(
 ) -> Result<()>
 where
     T: Transport + Clone,
-    P: Provider<T> + WalletProvider,
+    P: Provider<T> + WalletProvider + Clone + 'static,
 {
     let (client_tx, mut client_rx) = mpsc::channel::<ServerMessage>(100);
     let ws_stream = match accept_async(stream).await {
@@ -305,6 +306,24 @@ where
                                 tracing::error!("Failed to parse address '{}': {}", address, e);
                             }
                         },
+                        ClientMessage::RestartGame => {
+                            tracing::info!("🔄 Restart game request received");
+                            let provider_clone = provider.clone();
+                            let state_clone = state_clone.clone();
+                            let broadcast_tx_clone = broadcast_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = crate::backend::handle_restart_game(
+                                    provider_clone,
+                                    contract_address,
+                                    state_clone,
+                                    broadcast_tx_clone,
+                                )
+                                .await
+                                {
+                                    tracing::error!("Failed to restart game: {}", e);
+                                }
+                            });
+                        }
                     },
                     Err(e) => {
                         tracing::error!("Failed to parse client message: {}", e);

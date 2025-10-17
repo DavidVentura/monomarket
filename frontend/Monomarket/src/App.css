@@ -146,6 +146,25 @@ h2 {
   margin-top: 10px;
 }
 
+.admin-restart-btn {
+  margin-top: 20px;
+  padding: 12px 30px;
+  font-size: 1rem;
+  font-weight: bold;
+  font-family: inherit;
+  background: #3a1e1e;
+  color: #f48771;
+  border: 2px solid #f48771;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.admin-restart-btn:hover {
+  background: #4d2a2a;
+  transform: translateY(-2px);
+}
+
 @keyframes pulse {
   0%, 100% {
     opacity: 0.6;
