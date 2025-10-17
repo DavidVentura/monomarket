@@ -126,12 +126,6 @@ h2 {
   border: 1px solid #3e3e42;
 }
 
-.loading-spinner {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .loading-text {
   font-size: 1.1rem;
   color: #569cd6;
@@ -232,7 +226,7 @@ h2 {
 
 .stat-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
   gap: 15px;
   margin-bottom: 20px;
 }
@@ -279,7 +273,6 @@ h2 {
 
 .chart-with-gas {
   display: flex;
-  gap: 15px;
   align-items: stretch;
 }
 

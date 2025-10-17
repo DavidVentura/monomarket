@@ -18,9 +18,13 @@ import type {
 import { PriceChart } from "./PriceChart";
 import { GasBar } from "./GasBar";
 import { FloatingMessage } from "./FloatingMessage";
+import { SpinningCoin } from "./SpinningCoin";
 import "./App.css";
 
-const WS_URL = "ws://worklaptop.labs:8090";
+const WS_URL = (() => {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}/ws`;
+})();
 const CHAIN_ID = 30143n;
 const GAS_PRICE = 0x21d664903cn;
 
@@ -57,6 +61,7 @@ function App() {
   const prevHoldingsRef = useRef<Map<string, number>>(new Map());
   const messageIdRef = useRef(0);
   const namesRef = useRef<Map<string, string>>(new Map());
+  const stateNameRef = useRef<State["name"]>("InitialState");
 
   const addLog = (message: string, logType: LogEntry["logType"] = "info") => {
     setLogs((prev) => [...prev, { timestamp: new Date(), message, logType }]);
@@ -264,9 +269,15 @@ function App() {
           const previousHoldings = prevHoldingsRef.current.get(addressLower);
           const playerName = namesRef.current.get(addressLower) || "Unknown";
 
+          console.log(
+            "position",
+            stateNameRef.current,
+            "previous",
+            previousHoldings
+          );
           if (
             previousHoldings !== undefined &&
-            state.name === "TradableState"
+            stateNameRef.current === "TradableState"
           ) {
             const holdingsDiff = data.holdings - previousHoldings;
             if (holdingsDiff > 0) {
@@ -339,7 +350,7 @@ function App() {
 
         case "game_started": {
           console.log(
-            `Game started: blocks ${data.start_height} to ${data.end_height}`
+            `Game started: blocks ${data.start_height} to ${data.end_height}, state = ${stateNameRef.current}`
           );
           addLog(`Game started`, "info");
           setState((prev) => {
@@ -360,7 +371,10 @@ function App() {
               } as State;
             }
             if (prev.name === "GameEnded") {
-              const { firstBlockTimestamp, priceHistory, ...restState } = prev.state;
+              // this is intentionally pulled out of state before spreading
+              // eslint-disable-next-line @typescript-eslint/no-unused-vars
+              const { firstBlockTimestamp, priceHistory, ...restState } =
+                prev.state;
               return {
                 name: "WaitingForGameStart",
                 state: {
@@ -431,6 +445,7 @@ function App() {
   }, [state]);
 
   useEffect(() => {
+    console.log("state", state.name);
     if (
       state.name === "WaitingForGameStart" &&
       state.state.startHeight !== undefined &&
@@ -579,6 +594,10 @@ function App() {
   };
 
   useEffect(() => {
+    stateNameRef.current = state.name;
+  }, [state.name]);
+
+  useEffect(() => {
     if (consoleRef.current) {
       consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
     }
@@ -607,48 +626,7 @@ function App() {
 
       {state.name === "WaitingServerParams" && (
         <div className="loading-section">
-          <div className="loading-spinner">
-            <svg width="80" height="80" viewBox="0 0 80 80">
-              <circle
-                cx="40"
-                cy="40"
-                r="32"
-                fill="none"
-                stroke="#569cd6"
-                strokeWidth="4"
-                strokeLinecap="round"
-                strokeDasharray="150 50"
-              >
-                <animateTransform
-                  attributeName="transform"
-                  type="rotate"
-                  from="0 40 40"
-                  to="360 40 40"
-                  dur="1.5s"
-                  repeatCount="indefinite"
-                />
-              </circle>
-              <circle
-                cx="40"
-                cy="40"
-                r="24"
-                fill="none"
-                stroke="#4ec9b0"
-                strokeWidth="3"
-                strokeLinecap="round"
-                strokeDasharray="100 50"
-              >
-                <animateTransform
-                  attributeName="transform"
-                  type="rotate"
-                  from="360 40 40"
-                  to="0 40 40"
-                  dur="2s"
-                  repeatCount="indefinite"
-                />
-              </circle>
-            </svg>
-          </div>
+          <SpinningCoin size={180} />
           <p className="loading-text">Funding your wallet...</p>
         </div>
       )}
@@ -679,48 +657,7 @@ function App() {
 
       {state.name === "WaitingForGameStart" && (
         <div className="loading-section">
-          <div className="loading-spinner">
-            <svg width="80" height="80" viewBox="0 0 80 80">
-              <circle
-                cx="40"
-                cy="40"
-                r="32"
-                fill="none"
-                stroke="#569cd6"
-                strokeWidth="4"
-                strokeLinecap="round"
-                strokeDasharray="150 50"
-              >
-                <animateTransform
-                  attributeName="transform"
-                  type="rotate"
-                  from="0 40 40"
-                  to="360 40 40"
-                  dur="1.5s"
-                  repeatCount="indefinite"
-                />
-              </circle>
-              <circle
-                cx="40"
-                cy="40"
-                r="24"
-                fill="none"
-                stroke="#4ec9b0"
-                strokeWidth="3"
-                strokeLinecap="round"
-                strokeDasharray="100 50"
-              >
-                <animateTransform
-                  attributeName="transform"
-                  type="rotate"
-                  from="360 40 40"
-                  to="0 40 40"
-                  dur="2s"
-                  repeatCount="indefinite"
-                />
-              </circle>
-            </svg>
-          </div>
+          <SpinningCoin size={180} />
           <p className="loading-text">Waiting for game to start...</p>
           {isAdmin() && (
             <button onClick={handleRestartGame} className="admin-restart-btn">
@@ -987,7 +924,7 @@ function App() {
 
       {state.name !== "InitialState" && currentPortfolio.size > 0 && (
         <div className="portfolio-section">
-          <h2>All Players</h2>
+          <h2>Scores</h2>
           <table className="portfolio-table">
             <thead>
               <tr>

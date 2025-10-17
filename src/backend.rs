@@ -37,7 +37,6 @@ where
 {
     let balance = provider.get_balance(addr).await?;
     tracing::info!("Balance for {:?}: {} wei", addr, balance);
-    let factor = 1_000_000_000_000_000u64;
 
     if balance > U256::ZERO {
         tracing::info!(

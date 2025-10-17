@@ -1,6 +1,7 @@
 mod backend;
 mod chain_events;
 mod ws;
+mod ws_axum;
 
 use alloy::{
     network::EthereumWallet,
@@ -11,16 +12,20 @@ use alloy::{
     transports::Transport,
 };
 use anyhow::Result;
+use axum::{
+    extract::{State as AxumState, WebSocketUpgrade},
+    response::IntoResponse,
+    routing::get,
+    Router,
+};
 use futures_util::StreamExt;
 use std::{
     collections::{HashMap, HashSet},
     env,
     sync::Arc,
 };
-use tokio::{
-    net::TcpListener,
-    sync::{RwLock, broadcast, mpsc},
-};
+use tokio::sync::{RwLock, broadcast, mpsc};
+use tower_http::services::ServeDir;
 use ws::ServerMessage;
 
 #[derive(Debug)]
@@ -67,6 +72,17 @@ pub struct GasCosts {
     pub sell: u64,
 }
 
+#[derive(Clone)]
+struct ServerState<T: Transport + Clone, P: Provider<T> + WalletProvider + Clone + 'static> {
+    app_state: Arc<RwLock<AppState>>,
+    broadcast_tx: broadcast::Sender<ServerMessage>,
+    provider: P,
+    gas_costs: Arc<GasCosts>,
+    contract_address: Address,
+    backend_tx_sender: mpsc::Sender<BackendTxEvent>,
+    _phantom: std::marker::PhantomData<T>,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -74,7 +90,7 @@ async fn main() -> Result<()> {
     let rpc_url = env::var("RPC_URL").expect("RPC_URL not set");
     let contract_address = env::var("CONTRACT_ADDRESS").expect("CONTRACT_ADDRESS not set");
     let private_key = env::var("PRIVATE_KEY").expect("PRIVATE_KEY not set");
-    let ws_port = env::var("WEBSOCKET_PORT").unwrap_or_else(|_| "8090".to_string());
+    let ws_port = env::var("WEBSOCKET_PORT").unwrap_or_else(|_| "8000".to_string());
 
     tracing::info!("Connecting to RPC: {}", rpc_url);
     tracing::info!("Contract address: {}", contract_address);
@@ -175,7 +191,7 @@ async fn main() -> Result<()> {
     let gas_costs_clone = gas_costs.clone();
     let backend_tx_sender_clone = backend_tx_sender.clone();
     tokio::spawn(async move {
-        if let Err(e) = run_websocket_server(
+        if let Err(e) = run_http_server(
             &ws_port,
             state_clone,
             broadcast_tx_clone,
@@ -186,7 +202,7 @@ async fn main() -> Result<()> {
         )
         .await
         {
-            tracing::error!("WebSocket server error: {}", e);
+            tracing::error!("HTTP server error: {}", e);
         }
     });
 
@@ -253,7 +269,7 @@ async fn main() -> Result<()> {
     chain_events::process_chain_events(stream, state, broadcast_tx).await
 }
 
-async fn run_websocket_server<T, P>(
+async fn run_http_server<T, P>(
     port: &str,
     state: Arc<RwLock<AppState>>,
     broadcast_tx: broadcast::Sender<ServerMessage>,
@@ -266,36 +282,56 @@ where
     T: Transport + Clone,
     P: Provider<T> + WalletProvider + Clone + 'static,
 {
-    let addr = format!("0.0.0.0:{}", port);
-    let listener = TcpListener::bind(&addr).await?;
-    tracing::info!("WebSocket server listening on {}", addr);
+    let server_state = ServerState {
+        app_state: state,
+        broadcast_tx,
+        provider,
+        gas_costs,
+        contract_address,
+        backend_tx_sender,
+        _phantom: std::marker::PhantomData,
+    };
 
-    while let Ok((stream, addr)) = listener.accept().await {
-        tracing::info!("Accepting connection from: {}", addr);
-        let state_clone = state.clone();
-        let broadcast_rx = broadcast_tx.subscribe();
-        let broadcast_tx_clone = broadcast_tx.clone();
-        let provider_clone = provider.clone();
-        let gas_costs_clone = gas_costs.clone();
-        let backend_tx_sender_clone = backend_tx_sender.clone();
-        tokio::spawn(async move {
-            match ws::handle_connection(
-                stream,
-                state_clone,
-                broadcast_rx,
-                broadcast_tx_clone,
-                provider_clone,
-                gas_costs_clone,
-                contract_address,
-                backend_tx_sender_clone,
-            )
-            .await
-            {
-                Ok(_) => tracing::info!("Connection from {} closed cleanly", addr),
-                Err(e) => tracing::error!("Connection from {} error: {}", addr, e),
-            }
-        });
-    }
+    let app = Router::new()
+        .route("/ws", get(ws_handler))
+        .fallback_service(ServeDir::new("frontend/Monomarket/dist"))
+        .with_state(server_state);
+
+    let addr = format!("0.0.0.0:{}", port);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    tracing::info!("HTTP server listening on {}", addr);
+    tracing::info!("  WebSocket endpoint: ws://{}/ws", addr);
+    tracing::info!("  Static files from: frontend/Monomarket/dist/");
+
+    axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+async fn ws_handler<T, P>(
+    ws: WebSocketUpgrade,
+    AxumState(state): AxumState<ServerState<T, P>>,
+) -> impl IntoResponse
+where
+    T: Transport + Clone,
+    P: Provider<T> + WalletProvider + Clone + 'static,
+{
+    ws.on_upgrade(move |socket| async move {
+        let broadcast_rx = state.broadcast_tx.subscribe();
+
+        if let Err(e) = ws_axum::handle_axum_connection(
+            socket,
+            state.app_state,
+            broadcast_rx,
+            state.broadcast_tx,
+            state.provider,
+            state.gas_costs,
+            state.contract_address,
+            state.backend_tx_sender,
+        )
+        .await
+        {
+            tracing::error!("WebSocket connection error: {}", e);
+        }
+    })
 }
