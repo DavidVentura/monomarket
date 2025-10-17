@@ -5,10 +5,9 @@ libs = ["contract/lib"]
 use_literal_content = true # use source code
 
 # Monad Configuration
-eth-rpc-url="https://rpc-testnet-2.monadinfra.com"
-#eth-rpc-url="https://rpc-testnet.monadinfra.com"
-#https://testnet-rpc.monad.xyz"
-chain_id = 30143
-#chain_id = 10143
+#eth-rpc-url="https://rpc-testnet-2.monadinfra.com"
+eth-rpc-url="https://rpc-testnet.monadinfra.com"
+#chain_id = 30143
+chain_id = 10143
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

@@ -292,7 +292,7 @@ where
         }
     }
 
-    let game_duration = 50; // TODO
+    let game_duration = 200; // TODO
     // Step 4: Call start() on contract
     tracing::info!("Step 4: Starting new game ({game_duration} blocks)");
     let nonce = {

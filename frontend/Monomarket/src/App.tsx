@@ -25,7 +25,7 @@ const WS_URL = (() => {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}/ws`;
 })();
-const CHAIN_ID = 30143n;
+const CHAIN_ID = 10143n;
 const GAS_PRICE = 0x21d664903cn;
 
 const CONTRACT_ABI = [
@@ -712,7 +712,19 @@ function App() {
                 </div>
                 <div className="stat-card">
                   <div className="stat-label">Net Worth</div>
-                  <div className="stat-value">
+                  <div
+                    className="stat-value"
+                    style={{
+                      color: (() => {
+                        const netWorth =
+                          state.state.balance +
+                          state.state.holdings * state.state.currentPrice;
+                        if (netWorth > 1000) return "hsl(120, 50%, 65%)";
+                        if (netWorth < 1000) return "hsl(0, 50%, 65%)";
+                        return "hsl(240, 50%, 65%)";
+                      })(),
+                    }}
+                  >
                     {state.state.balance +
                       state.state.holdings * state.state.currentPrice}
                   </div>
