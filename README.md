@@ -15,4 +15,4 @@ When a client connects to the server, the server acts as a faucet and funds the 
 
 Also, there's a 3d coin with the monad logo that is used as a spinner:
 
-<video src="image/spinner.mp4" autoplay loop muted controls with="400"></video>
+![Spinner](image/spinner.gif)
